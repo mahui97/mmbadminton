@@ -8,6 +8,7 @@ from mmskeleton.utils import call_obj
 from mmskeleton.datasets import skeleton
 from multiprocessing import current_process, Process, Manager
 from mmskeleton.utils import cache_checkpoint
+from mmskeleton.court import init_court_model, is_in_court
 from mmcv.utils import ProgressBar
 
 pose_estimators = dict()
@@ -76,6 +77,7 @@ def build(detection_cfg,
         annotations = []
         num_keypoints = -1
 
+        court_model_M = init_court_model(video_frames[0])
         for i, image in enumerate(video_frames):
             inputs.put((i, image))
 
@@ -86,8 +88,28 @@ def build(detection_cfg,
 
             num_person = len(t['joint_preds'])
             assert len(t['person_bbox']) == num_person
+            
+            # in_court[j]=0: this person is not a player
+            # in_court[j]=1: a player we need
+            in_court = np.zeros((num_person))
+            bbox_size = 2147483648
+            last_person_id = -1
+            for j in range(num_person):
+                in_court[j] = 1 if is_in_court(t['joint_preds'][j][15:17, :], court_model_M) == True else 0
+                if in_court[j] == 1:
+                    bspace = (t['person_bbox'][j][2] - t['person_bbox'][j][0]) * (t['person_bbox'][j][3] - t['person_bbox'][j][1])
+                    if bbox_size <= bspace:
+                        in_court[j] = 0
+                    else:
+                        bbox_size = bspace
+                        if last_person_id > -1:
+                            in_court[last_person_id] = 0
+                        last_person_id = j
+            assert np.sum(in_court) == 1
 
             for j in range(num_person):
+                if in_court[j] == 0:
+                    continue
                 keypoints = [[p[0], p[1], round(s[0], 2)] for p, s in zip(
                     t['joint_preds'][j].round().astype(int).tolist(), t[
                         'joint_scores'][j].tolist())]
@@ -103,8 +125,9 @@ def build(detection_cfg,
 
         # output results
         annotations = sorted(annotations, key=lambda x: x['frame_index'])
-        category_id = video_categories[video_file][
-            'category_id'] if video_file in video_categories else -1
+        action = video_file.split('.')[0].split('_')[0]
+        category_id = video_categories[action][
+            'category_id'] if action in video_categories else -1
         info = dict(
             video_name=video_file,
             resolution=reader.resolution,

@@ -499,7 +499,7 @@ def init_court_model(img):
 	result4 = img.copy()
 	M, score = model_fitting(lines, standard_indexes=standard_indexes, standard_points=standard_points, standard_lines=standard_lines)
 	perspective = cv2.warpPerspective(result4, M, (result4.shape[1], result4.shape[0]))
-	#  cv2.imwrite("suitable.png", perspective, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+	cv2.imwrite("suitable.png", perspective, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 	return M
 

@@ -2,17 +2,21 @@
     "categories": [
         "skateboarding",
         "clean_and_jerk",
-        "ta_chi"
+        "ta_chi",
+        "ff_a_01"
     ],
     "annotations": {
-        "clean_and_jerk.mp4": {
+        "clean": {
             "category_id": 1
         },
-        "skateboarding.mp4": {
+        "skateboarding": {
             "category_id": 0
         },
-        "ta_chi.mp4": {
+        "ta": {
             "category_id": 2
+        },
+        "ff": {
+            "category_id": 3
         }
     }
 }
