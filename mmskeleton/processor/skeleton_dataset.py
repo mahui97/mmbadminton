@@ -8,7 +8,7 @@ from mmskeleton.utils import call_obj
 from mmskeleton.datasets import skeleton
 from multiprocessing import current_process, Process, Manager
 from mmskeleton.utils import cache_checkpoint
-from mmskeleton.court import init_court_model, is_in_court
+from mmskeleton.court import court_model
 from mmcv.utils import ProgressBar
 
 pose_estimators = dict()
@@ -71,13 +71,14 @@ def build(detection_cfg,
     video_file_list = os.listdir(video_dir)
     prog_bar = ProgressBar(len(video_file_list))
     for video_file in video_file_list:
-
+        if video_file != 'ff_d_01.mp4':
+            continue
         reader = mmcv.VideoReader(os.path.join(video_dir, video_file))
         video_frames = reader[:video_max_length]
         annotations = []
         num_keypoints = -1
 
-        court_model_M = init_court_model(video_frames[0])
+        frame_court_model = court_model(video_frames[0])
         for i, image in enumerate(video_frames):
             inputs.put((i, image))
 
@@ -89,23 +90,23 @@ def build(detection_cfg,
             num_person = len(t['joint_preds'])
             assert len(t['person_bbox']) == num_person
             
-            # in_court[j]=0: this person is not a player
-            # in_court[j]=1: a player we need
-            in_court = np.zeros((num_person))
-            bbox_size = 2147483648
-            last_person_id = -1
-            for j in range(num_person):
-                in_court[j] = 1 if is_in_court(t['joint_preds'][j][15:17, :], court_model_M) == True else 0
-                if in_court[j] == 1:
-                    bspace = (t['person_bbox'][j][2] - t['person_bbox'][j][0]) * (t['person_bbox'][j][3] - t['person_bbox'][j][1])
-                    if bbox_size <= bspace:
-                        in_court[j] = 0
-                    else:
-                        bbox_size = bspace
-                        if last_person_id > -1:
-                            in_court[last_person_id] = 0
-                        last_person_id = j
-            assert np.sum(in_court) == 1
+            # # in_court[j]=0: this person is not a player
+            # # in_court[j]=1: a player we need
+            # in_court = np.zeros((num_person))
+            # bbox_size = 2147483648
+            # last_person_id = -1
+            # for j in range(num_person):
+            #     in_court[j] = 1 if is_in_court(t['joint_preds'][j][15:17, :], court_model_M) == True else 0
+            #     if in_court[j] == 1:
+            #         bspace = (t['person_bbox'][j][2] - t['person_bbox'][j][0]) * (t['person_bbox'][j][3] - t['person_bbox'][j][1])
+            #         if bbox_size <= bspace:
+            #             in_court[j] = 0
+            #         else:
+            #             bbox_size = bspace
+            #             if last_person_id > -1:
+            #                 in_court[last_person_id] = 0
+            #             last_person_id = j
+            # assert np.sum(in_court) == 1
 
             for j in range(num_person):
                 if in_court[j] == 0:
