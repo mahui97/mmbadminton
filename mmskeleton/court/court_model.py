@@ -5,6 +5,7 @@ import matplotlib
 from PIL import Image
 from matplotlib.pyplot import imshow
 from matplotlib import pyplot as plt
+from numpy.lib.type_check import imag
 from sympy.utilities.iterables import multiset_permutations, variations
 
 # converted = convert_hls(img)
@@ -51,65 +52,87 @@ class court_model(object):
 	def __init__(self, img):
 		super().__init__()
 		self.standard = dict()
-		self.standard['lines'] = np.array([[14, 29, 205, 29],
-						   [14, 53, 205, 53],
-						   [14, 177, 205, 177],
-						   [14, 303, 205, 303],
-						   [14, 426, 205, 426],
-						   [14, 450, 205, 450],
-						   [14, 29, 14, 450],
+		# 垂直线
+		self.standard['vlines'] = np.array([[14, 29, 14, 450],
 						   [29, 29, 29, 450],
 						   [110, 29, 110, 177],
 						   [110, 303, 110, 450],
 						   [191, 29, 191, 450],
 						   [205, 29, 205, 450]])
+		# 水平线
+		self.standard['hlines'] = np.array([[14, 29, 205, 29],
+						   [14, 53, 205, 53],
+						   [14, 177, 205, 177],
+						   [14, 303, 205, 303],
+						   [14, 426, 205, 426],
+						   [14, 450, 205, 450]])
 		self.standard['indexes'] = np.arange(12)
-		_, self.standard['intersections'] = self.calculate_intersections_as_matrix(self.standard['lines'])
+		self.calculate_intersections_as_matrix()
 
 		self.image = dict()
-		self.image['lines'] = np.zeros((1, 4))
-		self.image['intersections'] = np.zeros((1,1,2))
 		i = 0
-		while i < 4 and self.image['lines'].shape[0] < 4:
+		while i < 4 and (self.image.get('lines', -1) == -1 or self.image['lines'].shape[0] < 4):
 			candidate = self.white_pixel_extract(img, threshold=190-12*i)
-			self.image['lines'], self.image['intersections'] = self.line_detection(candidate, img)
+			self.line_detection(candidate, img)
 			i += 1
 		if self.image['lines'].shape[0] < 4:
 			print('Court Model Init Failed! Court lines not enough!')
 			return -1
 		self.M = self.model_fitting()
+		return 0
 	
-	def calculate_intersections_as_matrix(self, slines, img_shape=None):
+	def calculate_intersections_as_matrix(self, lines=None, normals=None, img_shape=None):
 		'''
 		calculate intersection of lines in the standard model. If img_shape is not None, we remove intersections those are out of image box.
 		:param: slines: n * 4 matrix, a list of line (x1, y1, x2, y2)
 		:param: img_shape: such as (1080, 1980, 3).
 		:return: points: n * n * 2, points[i, j] = the intersection of line i and line j, and it's location is (x, y)
 		'''
-		n = slines.shape[0]
-		points = np.zeros(n * n * 2, dtype='int').reshape((n, n, 2))
-		for i, l1 in enumerate(slines):
-			for j, l2 in enumerate(slines):
+		# calculate standard intersections matrix
+		if lines is None:
+			hlines = self.standard['hlines']
+			vlines = self.standard['vlines']
+		
+			points = np.ones(hlines.shape[0] * vlines.shape[0] * 2, dtype='int').reshape((hlines.shape[0], vlines.shape[0], 2))
+			points = -1 * points
+			for i, l1 in enumerate(hlines):
+				for j, l2 in enumerate(vlines):
+					points[i, j, 0], points[i, j, 1] = self.calculate_intersection(l1, l2)
+			self.standard['intersections'] = points
+			return
+		
+		# calculate image intersections matrix
+		n = lines.shape[0]
+		points = np.ones(n * n * 2, dtype='int').reshape((n, n, 2)) * (-1)
+		for i, l1 in enumerate(lines):
+			for j, l2 in enumerate(lines):
 				if i >= j:
 					continue
 				points[i, j, 0], points[i, j, 1] = self.calculate_intersection(l1, l2)
-		if img_shape == None:
-			return points
-		pshape = points.shape
-		p0 = points[:, :, 0].reshape((pshape[0], pshape[1], 1))
-		p0 = np.where((p0 >= 0) & (p0 <= img_shape[0]), p0, -1)
-		p1 = points[:, :, 1].reshape((pshape[0], pshape[1], 1))
-		p1 = np.where((p0 >= 0) & (p0 <= img_shape[1]), p1, -1)
-		points = np.concatenate((p0, p1), axis=2)
+		if img_shape is not None:
+			pshape = points.shape
+			p0 = points[:, :, 0].reshape((pshape[0], pshape[1], 1))
+			p0 = np.where((p0 >= 0) & (p0 <= img_shape[0]), p0, -1)
+			p1 = points[:, :, 1].reshape((pshape[0], pshape[1], 1))
+			p1 = np.where((p0 >= 0) & (p0 <= img_shape[1]), p1, -1)
+			points = np.concatenate((p0, p1), axis=2)
 
-		xx = np.sum(points, axis=(1,2))
-		invalid_idx = np.argwhere(xx < 0)
-		points = np.delete(points, invalid_idx, axis=0)
-		points = np.delete(points, invalid_idx, axis=1)
+			xx = np.sum(points, axis=(1,2))
+			invalid_idx = np.argwhere(xx < 0)
+			points = np.delete(points, invalid_idx, axis=0)
+			points = np.delete(points, invalid_idx, axis=1)
 
-		lines = np.delete(slines, invalid_idx, axis=0)
+			lines = np.delete(lines, invalid_idx, axis=0)
+			normals = np.delete(normals, invalid_idx, axis=0)
+		hgroup, vgroup = self.line_grouping(points)
+		ngroup = np.concatenate((hgroup, vgroup), axis=0)
+		self.image['hlines'] = lines[hgroup]
+		self.image['vlines'] = lines[vgroup]
+		self.image['lines'] = lines[ngroup]
+		self.image['normal'] = normals[ngroup]
+		self.image['intersections'] = points[hgroup][:, vgroup]
 
-		return lines, points
+		return
 
 
 	def line_constraint(self, g, tao, sigmal, sigmad):
@@ -176,14 +199,26 @@ class court_model(object):
 		cv2.imwrite(imgName, img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 
-	def remove_duplicate_line(self, lines, img):
+	def is_same_line(self, normal1, normal2, athres, dthres):
 		'''
-		remove duplicate lines.
-		:param: lines: n * 4, a line = (x1, y1, x2, y2)
+		given two lines "normal1" and "normal2" , if they are the same line, return true; else, return false.
+		base: ||normal1|| = ||normal2|| = 1
+		:params: normal1: the normal of line1, (n1, n2, d)
+		:params: normal2: the normal of line2, (n1, n2, d)
+		:params: athres: the angle threshold, if two lines' angle less than athres, we think they may be the same line.
+		:params: dthres: the distance threshold, if two lines' distance shorter than dthres, we think they may be the same line.
+		
+		:return: true if n1T * n2 < cos(0.75C) && |d1 - d2| < 8
+				false else
+		'''
+		deltaD = abs(normal1[2] - normal2[2])
+		cosAngle = normal1[0] * normal2[0] + normal1[1] * normal2[1]
+		return cosAngle > athres and deltaD < dthres
+
+	def calculate_normal(self, lines):
+		"""
 		normal: n * 5, a normal = (n1, n2, d, k, b)
-		:return: purelines: a (m * 4) matrix, m <= n.
-			purenormals: a (m * 5) matrix
-		'''
+		"""
 		# get normal: n1*x + n2 * y - d = 0
 		line0, line1, line2, line3 = lines[:, 0:1], lines[:, 1:2], lines[:, 2:3], lines[:, 3:]
 		normal = np.concatenate([
@@ -193,28 +228,33 @@ class court_model(object):
 		tmp = np.sum(normal[:, :2] ** 2, axis=1, keepdims=True) ** .5
 		normal /= tmp
 
+		# get k and b. line: y = k * x + b
+		kb = np.concatenate([
+			line3 - line1, line2 * line1 - line0 * line3
+		], axis=1, dtype='float')
+		tmp = line2 - line0
+		kb = kb / tmp
+		normal = np.concatenate((normal, kb), axis=1, dtype='float')
+
+		return normal
+
+	def remove_duplicate_line(self, lines, img):
+		'''
+		remove duplicate lines.
+		:param: lines: n * 4, a line = (x1, y1, x2, y2)
+		normal: n * 5, a normal = (n1, n2, d, k, b)
+		:return: purelines: a (m * 4) matrix, m <= n.
+			purenormals: a (m * 5) matrix
+		'''
+		normal = self.calculate_normal(lines)
 		# get same-line set, if line a and line b are the same line, ufs.uf[a] = ufs.uf[b]
 		ufs = UnionFind(lines.shape[0])
-		def is_same_line(normal1, normal2, athres, dthres):
-			'''
-			given two lines "normal1" and "normal2" , if they are the same line, return true; else, return false.
-			base: ||normal1|| = ||normal2|| = 1
-			:params: normal1: the normal of line1, (n1, n2, d)
-			:params: normal2: the normal of line2, (n1, n2, d)
-			:params: athres: the angle threshold, if two lines' angle less than athres, we think they may be the same line.
-			:params: dthres: the distance threshold, if two lines' distance shorter than dthres, we think they may be the same line.
-			
-			:return: true if n1T * n2 < cos(0.75C) && |d1 - d2| < 8
-					false else
-			'''
-			deltaD = abs(normal1[2] - normal2[2])
-			cosAngle = normal1[0] * normal2[0] + normal1[1] * normal2[1]
-			return cosAngle > athres and deltaD < dthres
+		
 		angleThres = np.cos(np.pi / 240)
 		dThres = 8
 		for i, n1 in enumerate(normal):
 			for j, n2 in enumerate(normal):
-				if i < j and is_same_line(n1, n2, angleThres, dThres):
+				if i < j and self.is_same_line(n1, n2, angleThres, dThres):
 					ufs.union(i + 1, j + 1)
 
 		# # draw lines, the same lines have the same color
@@ -224,12 +264,7 @@ class court_model(object):
 		self.draw_line("mediating/multiline.png", result2, lines, coloridx=ufsidx)
 
 		# remove duplicate lines, every color only need 1 line.
-		kb = np.concatenate([
-			line3 - line1, line2 * line1 - line0 * line3
-		], axis=1, dtype='float')
-		tmp = line2 - line0
-		kb = kb / tmp
-		normal = np.concatenate((normal, kb), axis=1, dtype='float')
+		
 		pureidx = np.unique(ufsidx)
 		purelinesarray = []
 		purenormalsarray = []
@@ -256,11 +291,12 @@ class court_model(object):
 		# get new lines 'purelines' and new normals 'purenormals'
 		purelines = np.array(purelinesarray)
 		purenormals = np.array(purenormalsarray)
+		idx = np.lexsort(purenormals[4]) #TODO: bug
 		result3 = img.copy()
 		self.draw_line("mediating/pureline.png", result3, purelines, coloridx=pureidx)
-		return purelines, purenormals
+		return purelines[idx], purenormals[idx]
 
-
+	
 	def line_detection(self, img, source_image):
 		"""
 		:params: img: input image. we detecte lines from this image.
@@ -296,9 +332,9 @@ class court_model(object):
 
 		lines = lines.reshape((lines.shape[0], -1))
 		purelines, purenormals = self.remove_duplicate_line(lines, source_image)
-		purelines, image_intersections = self.calculate_intersections_as_matrix(purelines, img_shape=img.shape)
+		self.calculate_intersections_as_matrix(purelines, purenormals, img_shape=img.shape)
 
-		return purelines, image_intersections
+		return
 
 
 	def calculate_intersection(self, line1, line2):
@@ -362,18 +398,16 @@ class court_model(object):
 		return points
 
 
-	def calculate_mapping_lines(self, M, idxes):
+	def calculate_mapping_lines(self, M):
 		'''
 		image(u, v, 1) = M * standard(x, y, 1)^T
 		When we get a homography M, we need calculate the lines mapped from the standard lines[idxes] to the lines on the image.
-		:params: standard_lines: constant matrix
 		:params: M: homography
 		:params: idxes: standard line indexes we need to map.
 		:return: lines: n * (x1, y1, x2, y2), mapping lines to the image.
 		'''
-		n = idxes.shape[0]
-		sl = self.standard['lines'][idxes]
-
+		sl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0)
+		n = sl.shape[0]
 		point1 = np.hstack((sl[:, :2], np.ones((n, 1), dtype='int')))
 		mapping1 = np.dot(M, point1.T)
 		mapping1 = mapping1.T
@@ -397,30 +431,74 @@ class court_model(object):
 		return mole / deno
 
 
-	def calculate_score(self, imglines, maplines):
+	def calculate_score(self, maplines):
 		'''
 		for px in each (imgline, mapline), we calculate distance(px, mapline) and add all distance to get score.
 		:params: imglines: we recognize lines from the image, n * (x1, y1, x2, y2)
 		:params: maplines: using homography M, we map the standard_line to image, n * (x1, y1, x2, y2)
 		:return: score: this mapping's score. We like lower score.
 		'''
+		imglines = self.image['lines']
+		inormal = self.image['normal']
+		mnormal = self.calculate_normal(maplines)
 		score = 0
-		for i in range(imglines.shape[0]):
-			il, ml = imglines[i], maplines[i]
-			iA = il[1] - il[3]
-			iB = il[0] - il[2]
-			iC = il[1] * il[2] - il[0] * il[3]
-			mA = ml[1] - ml[3]
-			mB = ml[0] - ml[2]
-			mC = ml[1] * ml[2] - ml[0] * ml[3]
-			deno = (mA ** 2 + mB ** 2) ** .5
-			for x0 in range(il[0], il[2] + 1):
-				y0 = -(iA * x0 + iC) / iB
-				mole = np.abs(mA * x0 + mB * y0 + mC)
-				score += (mole / deno)
+		angleThres = np.cos(np.pi / 240)
+		dThres = 8
+		for i in range(maplines.shape[0]):
+			for j in range(imglines.shape[0]):
+				flag = self.is_same_line(mnormal[i], inormal[j], angleThres, dThres)
+				if flag is False:
+					continue
+
+				il, ml = imglines[j], maplines[i]
+				iA = il[1] - il[3]
+				iB = il[0] - il[2]
+				iC = il[1] * il[2] - il[0] * il[3]
+				mA = ml[1] - ml[3]
+				mB = ml[0] - ml[2]
+				mC = ml[1] * ml[2] - ml[0] * ml[3]
+				deno = (mA ** 2 + mB ** 2) ** .5
+				for x0 in range(il[0], il[2] + 1):
+					y0 = -(iA * x0 + iC) / iB
+					mole = np.abs(mA * x0 + mB * y0 + mC)
+					score += (mole / deno)
 		return score
 
 
+	def line_grouping(self, intersections):
+		s = np.sum(intersections, axis=2)
+		d = np.argwhere(s > 0)
+		hgroup = np.unique(d[:, 0])
+		vgroup = np.unique(d[:, 1])
+		return hgroup, vgroup
+
+	def get_points(self, lidx, type='image'):
+		h1, h2, v1, v2 = lidx[0], lidx[1], lidx[2], lidx[3]
+		if type == 'image':
+			points = self.image['intersection'][[h1, h2]][:, [v1, v2]]
+		elif type == 'standard':
+			points = self.standard['intersection'][[h1, h2]][:, [v1, v2]]
+		points = points.reshape((4, 2))
+		return points
+	
+	def model_fitting_once(self, ig_points):
+		s = 2147483647
+		resM = np.zeros((3, 3), dtype=np.float16)
+		for sh in range(5):
+			for sv in range(4):
+				st_points = self.get_points(np.array(sh, sh+1, sv, sv+1), type='standard')
+
+				# 3. calculate homography matrix H
+				M, mask = cv2.findHomography(ig_points, st_points, cv2.RANSAC, 3.0)
+				if M is None:
+					continue
+				# 4. get lines from standard model using M.
+				# for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
+				mapping_lines = self.calculate_mapping_lines(M)
+				# 5. calculate accuracy score of p, and get the most suitable one.
+				score = self.calculate_score(mapping_lines)
+		return resM, s
+	
 	def model_fitting(self):
 		'''
 		fit standard model
@@ -433,43 +511,22 @@ class court_model(object):
 		resM = np.zeros((3, 3), dtype=np.float16)
 		# get all possible line lists
 		# for each line list:
-		for p in variations(self.standard_indexes, self.image['lines'].shape[0]):
-			pi = np.array(p)
-			# 1. get interpret points
-			spoints = self.get_standard_intersection(pi)
+		hidxes = np.arange(self.image['hlines'].shape[0]) - 1
+		vidxes = np.arange(self.image['vlines'].shape[0]) - 1
 
-			# 2. match standard points and image points
-			imagePoints = []
-			standPoints = []
-			for li in spoints:
-				for si in self.standard['intersections']:
-					if li[0] == si[0] and li[1] == si[1]:
-						imagePoints.append(li[2:])
-						standPoints.append(si[2:])
-			imagePoints = np.array(imagePoints)
-			standPoints = np.array(standPoints)
-			if imagePoints.shape[0] < 4:
-				print("intersection not enough.")
-				continue
-			# 3. calculate homography matrix H
-			M, mask = cv2.findHomography(imagePoints, standPoints, cv2.RANSAC, 3.0)
-			if M is None:
-				continue
-			'''
-			perspective = cv2.warpPerspective(img, M, (img.shape[1], img.shape[0]))
-			cv2.imshow("perspective", perspective)
-			print("get 1 result, end!")
-			return
-			'''
-			# 4. get lines from standard model using M.
-			# for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
-			mapping_lines = self.calculate_mapping_lines(self.standard_lines, M, pi)
-			# 5. calculate accuracy score of p, and get the most suitable one.
-			score = self.calculate_score(self.image['lines'], mapping_lines)
-			if score < s:
-				s = score
-				resM = M
-				print(p, "score: ", s)
+		for h in range(hidxes):
+			for v in range(vidxes):
+				ig_points = self.get_points(np.array(h, h+1, v, v+1), type='image')
+				M1, s1 = self.model_fitting_once(ig_points)
+				ig_points = self.get_points(np.array(v, v+1, h+1, h), type='image')
+				M2, s2 = self.model_fitting_once(ig_points)
+				if s2 < s1:
+					M1 = M2
+					s1 = s2
+				if s1 < s:
+					s = s1
+					resM = M1
+					print(p, "score: ", s)
 
 		# if pi[0] == 1 and pi[1] == 2 and pi[2] == 6 and pi[3] == 7 and pi[4] == 8:
 		# 	print("---[1,2,6,7,8]: ---\n", spoints)
