@@ -117,3 +117,6 @@ ENV/
 mmskeleton/version.py
 data
 .vscode
+
+# mediating image
+mediating/
