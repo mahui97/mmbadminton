@@ -7,7 +7,7 @@ from PIL import Image
 from matplotlib.pyplot import imshow
 from matplotlib import pyplot as plt
 from numpy.lib.type_check import imag
-from sympy.utilities.iterables import multiset_permutations, variations
+from sympy.utilities.iterables import multiset_permutations, subsets, variations
 
 class UnionFind(object):
 	def __init__(self, n):
@@ -529,7 +529,7 @@ class court_model(object):
 	def model_fitting_once(self, ig_points):
 		s = 2147483647
 		resM = np.zeros((3, 3), dtype=np.float16)
-		for sh in range(5):
+		for sh in range(3):
 			for sv in range(4):
 				st_points = self.get_points(np.array(sh, sh+1, sv, sv+1), type='standard')
 
@@ -561,22 +561,31 @@ class court_model(object):
 		# for each line list:
 		isx = self.image['intersections'][:, :, 0]
 		valid_points_idx = np.argwhere(isx > 0) # 找到所有非(-1, -1)的点的坐标
-		for pi in variations(np.range(valid_points_idx.shape[0]), 4):
+		for pi in subsets(np.arange(valid_points_idx.shape[0]), 4):
 			p = np.array(pi)
 			xyidx = valid_points_idx[p]
-			if Counter(xyidx.flatten()).max() > 2:
-				continue
-			# TODO: 待优化，对称的组合可以去掉
-			# 找到四个点，能够组成矩形，匹配每个小框框
-			M, score = self.model_fitting_once(self.image['intersections'][xyidx[:, 0], xyidx[:, 1]])
-			if score < s:
-				s = score
-				resM = M
-				print(p, "score: ", s)
 
-		# if pi[0] == 1 and pi[1] == 2 and pi[2] == 6 and pi[3] == 7 and pi[4] == 8:
-		# 	print("---[1,2,6,7,8]: ---\n", spoints)
-		# 	return resM, s
+			# 检查四个点是否有三点共线，如果有，则跳过
+			a = list(Counter(xyidx.flatten()))
+			if a.count(2) != len(a):
+				continue
+
+			# 检查四个点是否构成凸包，如果不是，则跳过
+			points = self.image['intersections'][xyidx[:, 0], xyidx[:, 1]]
+			hull = cv2.convexHull(points, clockwise=False, returnPoints=True)
+			if hull.shape[0] < 4:
+				continue
+			points = hull.reshape((4, -1))
+			# 找到四个点，能够组成矩形，匹配每个小框框
+			print(xyidx)
+			for i in range(4):
+				M, score = self.model_fitting_once(points)
+				if score < s:
+					s = score
+					resM = M
+					print(p, "score: ", s)
+				points = points[[1, 2, 3, 0]]
+
 		return resM, s
 
 	def init_court_model(self, img):
