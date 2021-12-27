@@ -70,7 +70,9 @@ class court_model(object):
 		if self.image['lines'].shape[0] < 5:
 			print('Court Model Init Failed! Court lines not enough!')
 		else:
-			self.M = self.model_fitting()
+			self.M, self.score = self.model_fitting()
+			pers = cv2.warpPerspective(img, self.M, (img.shape[1], img.shape[0]))
+			cv2.imwrite("mediating/perspective.png", pers, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 	
 	def calculate_intersections_as_matrix(self, lines=None):
 		'''
@@ -271,6 +273,43 @@ class court_model(object):
 
 		return normal
 
+	def calculate_y_line(self, line, x):
+		x1, y1, x2, y2 = line[:4]
+		A = y1 - y2
+		B = x2 - x1
+		C = x1 * y2 - x2 * y1
+		if B == 0:
+			return (y1 + y2) / 2
+		return -(A * x + C) / B
+
+	def merge_same_lines(self, lines, normals, ufsidx):
+		pureidx = np.unique(ufsidx)
+		purelinesarray = []
+		# 修改多条线逆合成一条线的算法，斜率取均值，然后找多条线段的中心点，用中心点拟合
+		for p in pureidx:
+			idx = np.argwhere(ufsidx == p).sum(axis=1)
+			tmpn = normals[idx]
+			tmpl = lines[idx]
+
+			# new line: y = avgk * x + avgb
+			avgk = tmpn[:, 3].mean()
+			avgx = tmpl[:, (0, 2)].mean()
+			y = np.array([self.calculate_y_line(ll, avgx) for ll in tmpl])
+			avgy = y.mean()
+			avgb = avgy - avgk * avgx
+
+			# get a new line and add to return vecs
+			x2 = tmpl[:, (0, 2)].max()
+			x1 = tmpl[:, (0, 2)].min()
+			pline = np.array([x1, x1 * avgk + avgb, x2, x2 * avgk + avgb], dtype='int')
+
+			purelinesarray.append(pline)
+		
+		purelines = np.array(purelinesarray)
+		purenormals = self.calculate_normal(purelines)
+		return purelines, purenormals
+
+
 	def remove_invalid_line(self, lines, contours):
 		'''
 		remove invalid and duplicated lines.
@@ -303,33 +342,7 @@ class court_model(object):
 		ufsidx = np.array(ufs.uf)[1:] - 1
 		
 		# remove duplicate lines, every color only need 1 line.
-		pureidx = np.unique(ufsidx)
-		purelinesarray = []
-		purenormalsarray = []
-		# TODO: 修改多条线逆合成一条线的算法，斜率取均值，然后找多条线段的中心点，用中心点拟合
-		for p in pureidx:
-			tmpn = normal[np.argwhere(ufsidx == p).sum(axis=1)]
-			avgk = tmpn[:, 3].mean()
-			avgb = tmpn[:, 4].mean()
-
-			# get a new line and add to return vecs
-			tmpl = lines[np.argwhere(ufsidx == p).sum(axis=1)]
-			x2 = tmpl[:, (0, 2)].max()
-			x1 = tmpl[:, (0, 2)].min()
-			pline = np.array([x1, x1 * avgk + avgb, x2, x2 * avgk + avgb], dtype='int')
-
-			tmp = (1 + avgk ** 2) ** .5
-			pnormal = np.array(
-				[pline[2] - pline[0], pline[3] - pline[1], np.abs(pline[1] * pline[2] - pline[0] * pline[3])],
-				dtype='float')
-			pnormal /= tmp
-			pnormal = np.insert(pnormal, 2, [avgk, avgb])
-			purelinesarray.append(pline)
-			purenormalsarray.append(pnormal)
-
-		# get new lines 'purelines' and new normals 'purenormals'
-		purelines = np.array(purelinesarray)
-		purenormals = np.array(purenormalsarray)
+		purelines, purenormals = self.merge_same_lines(lines, normal, ufsidx)
 		idx = np.lexsort(purenormals.T[:4, :])
 		return purelines[idx], purenormals[idx]
 
