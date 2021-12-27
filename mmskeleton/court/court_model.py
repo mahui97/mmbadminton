@@ -533,18 +533,17 @@ class court_model(object):
 	def get_points(self, lidx, type='image'):
 		h1, h2, v1, v2 = lidx[0], lidx[1], lidx[2], lidx[3]
 		if type == 'image':
-			points = self.image['intersection'][[h1, h2]][:, [v1, v2]]
+			points = self.image['intersections'][[h1, h2]][:, [v1, v2]]
 		elif type == 'standard':
-			points = self.standard['intersection'][[h1, h2]][:, [v1, v2]]
+			points = self.standard['intersections'][[h1, h2]][:, [v1, v2]]
 		points = points.reshape((4, 2))
 		return points
 	
-	def model_fitting_once(self, ig_points):
-		s = 2147483647
-		resM = np.zeros((3, 3), dtype=np.float16)
+	def model_fitting_once(self, ig_points, score):
+		resM = 1
 		for sh in range(3):
 			for sv in range(4):
-				st_points = self.get_points(np.array(sh, sh+1, sv, sv+1), type='standard')
+				st_points = self.get_points(np.array([sh, sh+1, sv, sv+1]), type='standard')
 
 				# 3. calculate homography matrix H
 				M, mask = cv2.findHomography(ig_points, st_points, cv2.RANSAC, 3.0)
@@ -554,11 +553,12 @@ class court_model(object):
 				# for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
 				mapping_lines = self.calculate_mapping_lines(M)
 				# 5. calculate accuracy score of p, and get the most suitable one.
-				score = self.calculate_score(mapping_lines)
+				s = self.calculate_score(mapping_lines)
 				if s < score:
-					s = score
+					score = s
 					resM = M
-		return resM, s
+					print(ig_points, "score: ", s)
+		return resM, score
 	
 	def model_fitting(self):
 		'''
@@ -568,18 +568,18 @@ class court_model(object):
 		:return:
 		'''
 
-		s = 2147483647
-		resM = np.zeros((3, 3), dtype=np.float16)
+		score = 2147483647
+		resM = 1
 		# get all possible line lists
 		# for each line list:
 		isx = self.image['intersections'][:, :, 0]
-		valid_points_idx = np.argwhere(isx > 0) # 找到所有非(-1, -1)的点的坐标
+		valid_points_idx = np.argwhere(isx != -1) # 找到所有非(-1, -1)的点的坐标
 		for pi in subsets(np.arange(valid_points_idx.shape[0]), 4):
 			p = np.array(pi)
 			xyidx = valid_points_idx[p]
 
 			# 检查四个点是否有三点共线，如果有，则跳过
-			a = list(Counter(xyidx.flatten()))
+			a = list(Counter(xyidx.flatten()).values())
 			if a.count(2) != len(a):
 				continue
 
@@ -592,14 +592,13 @@ class court_model(object):
 			# 找到四个点，能够组成矩形，匹配每个小框框
 			print(xyidx)
 			for i in range(4):
-				M, score = self.model_fitting_once(points)
-				if score < s:
-					s = score
+				M, s = self.model_fitting_once(points, score)
+				if s < score:
 					resM = M
-					print(p, "score: ", s)
+					score = s
 				points = points[[1, 2, 3, 0]]
-
-		return resM, s
+		print(resM)
+		return resM, score
 
 	def init_court_model(self, img):
 		"""
