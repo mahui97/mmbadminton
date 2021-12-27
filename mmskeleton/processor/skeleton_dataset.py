@@ -71,7 +71,7 @@ def build(detection_cfg,
     video_file_list = os.listdir(video_dir)
     prog_bar = ProgressBar(len(video_file_list))
     for video_file in video_file_list:
-        if video_file != 'ff_e_01.mp4':
+        if video_file != 'ff_d_01.mp4':
             continue
         reader = mmcv.VideoReader(os.path.join(video_dir, video_file))
         video_frames = reader[:video_max_length]

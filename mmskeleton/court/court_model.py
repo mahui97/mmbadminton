@@ -48,9 +48,9 @@ class court_model(object):
 		self.standard['vlines'] = np.array([[14, 29, 14, 450],
 						   [29, 29, 29, 450],
 						   [110, 29, 110, 177],
-						   [110, 303, 110, 450],
 						   [191, 29, 191, 450],
-						   [205, 29, 205, 450]])
+						   [205, 29, 205, 450],
+						   [110, 303, 110, 450]])
 		# 水平线
 		self.standard['hlines'] = np.array([[14, 29, 205, 29],
 						   [14, 53, 205, 53],
@@ -231,7 +231,7 @@ class court_model(object):
 		cv2.imwrite(imgName, img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 
-	def is_same_line(self, line1, line2, normal1, normal2, athres, dthres):
+	def is_same_line(self, line1, line2, normal1=None, normal2=None, athres=0.99996, dthres=8):
 		'''
 		given two lines "normal1" and "normal2" , if they are the same line, return true; else, return false.
 		base: ||normal1|| = ||normal2|| = 1
@@ -243,6 +243,10 @@ class court_model(object):
 		:return: true if n1T * n2 < cos(0.75C) && |d1 - d2| < 8
 				false else
 		'''
+		if normal1 is None:
+			normal1 = self.calculate_normal(line1)
+		if normal2 is None:
+			normal2 = self.calculate_normal(line2)
 		d11 = self.distance_point_line(line1[:2], line2)
 		d12 = self.distance_point_line(line1[2:], line2)
 		d21 = self.distance_point_line(line2[:2], line1)
@@ -254,6 +258,8 @@ class court_model(object):
 		"""
 		normal: n * 5, a normal = (n1, n2, d, k, b)
 		"""
+		if lines.shape[0] == lines.size():
+			lines = lines.reshape((1, lines.shape[0]))
 		# get normal: n1*x + n2 * y - d = 0
 		line0, line1, line2, line3 = lines[:, 0:1], lines[:, 1:2], lines[:, 2:3], lines[:, 3:]
 		normal = np.concatenate([
@@ -384,7 +390,7 @@ class court_model(object):
 		self.draw_line("mediating/multiline.png", result2, lines)
 
 		purelines, purenormals = self.remove_invalid_line(lines, contours)
-		self.image['normal'] = purenormals
+		self.image['normals'] = purenormals
 		result3 = source_image.copy()
 		self.draw_line("mediating/pureline.png", result3, purelines)
 		self.calculate_intersections_as_matrix(purelines)
@@ -497,7 +503,7 @@ class court_model(object):
 		:return: score: this mapping's score. We like lower score.
 		'''
 		imglines = self.image['lines']
-		inormal = self.image['normal']
+		inormal = self.image['normals']
 		mnormal = self.calculate_normal(maplines)
 		score = 0
 		angleThres = np.cos(np.pi / 240)
@@ -531,16 +537,20 @@ class court_model(object):
 		return hgroup, vgroup
 
 	def get_points(self, lidx, type='image'):
+		"""
+		:return: points: 4 * (x, y), [left_bottom, right_bottom, right_top, left_top]
+		"""
 		h1, h2, v1, v2 = lidx[0], lidx[1], lidx[2], lidx[3]
 		if type == 'image':
-			points = self.image['intersections'][[h1, h2]][:, [v1, v2]]
+			points = self.image['intersections'][[h1, h1, h2, h2], [v1, v2, v2, v1]]
 		elif type == 'standard':
-			points = self.standard['intersections'][[h1, h2]][:, [v1, v2]]
+			points = self.standard['intersections'][[h1, h1, h2, h2], [v1, v2, v2, v1]]
 		points = points.reshape((4, 2))
 		return points
 	
 	def model_fitting_once(self, ig_points, score):
 		resM = 1
+		sstr = ''
 		for sh in range(3):
 			for sv in range(4):
 				st_points = self.get_points(np.array([sh, sh+1, sv, sv+1]), type='standard')
@@ -557,7 +567,17 @@ class court_model(object):
 				if s < score:
 					score = s
 					resM = M
-					print(ig_points, "score: ", s)
+					sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
+					sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
+					sstr = sstr + sigp + '\t' + sstp + '\t' + str(score)
+					# print(ig_points, st_points, "score: ", s)
+					# testimg = cv2.imread('mediating/pureline.png')
+					# mapping_lines = mapping_lines.astype(int)
+					# mapname = 'mapimage/' + str(sh) + '_' + str(sv) + '_' + str(s).split('.')[0] + '.png'
+					# self.draw_line(mapname, testimg, mapping_lines)
+		f = 'mediating/ip_sp_score.txt'
+		with open(f, 'a') as file:
+			file.write(sstr)
 		return resM, score
 	
 	def model_fitting(self):
@@ -580,15 +600,26 @@ class court_model(object):
 
 			# 检查四个点是否有三点共线，如果有，则跳过
 			a = list(Counter(xyidx.flatten()).values())
+			b = Counter(xyidx.flatten()).keys()
 			if a.count(2) != len(a):
 				continue
 
 			# 检查四个点是否构成凸包，如果不是，则跳过
 			points = self.image['intersections'][xyidx[:, 0], xyidx[:, 1]]
 			hull = cv2.convexHull(points, clockwise=False, returnPoints=True)
+			points = hull.reshape((4, -1))
 			if hull.shape[0] < 4:
 				continue
-			points = hull.reshape((4, -1))
+			
+			# 检查四个点构成的凸包是否四个边对应四条检测的线，如果不是，则跳过
+			hullline1 = np.concatenate(points[0], points[1]).reshape((-1))
+			hullline2 = np.concatenate(points[1], points[2]).reshape((-1))
+			valid_rect = 0
+			for i in b:
+				if self.is_same_line(hullline1, self.image['lines'][i]) == True or self.is_same_line(hullline2, self.image['lines'][i]) == True:
+					valid_rect += 1
+			if valid_rect < 2:
+				continue
 			# 找到四个点，能够组成矩形，匹配每个小框框
 			print(xyidx)
 			for i in range(4):
