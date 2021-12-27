@@ -1,3 +1,4 @@
+from typing import Counter
 import cv2
 import numpy as np
 import math
@@ -7,15 +8,6 @@ from matplotlib.pyplot import imshow
 from matplotlib import pyplot as plt
 from numpy.lib.type_check import imag
 from sympy.utilities.iterables import multiset_permutations, variations
-
-# converted = convert_hls(img)
-# yellow color mask
-
-# lower = np.uint8([10, 0,   100])
-# upper = np.uint8([40, 255, 255])
-# yellow_mask = cv2.inRange(image, lower, upper)
-# combine the mask
-# mask = cv2.bitwise_or(white_mask, yellow_mask)
 
 class UnionFind(object):
 	def __init__(self, n):
@@ -71,17 +63,16 @@ class court_model(object):
 
 		self.image = dict()
 		i = 0
-		while i < 4 and (self.image.get('lines', -1) == -1 or self.image['lines'].shape[0] < 4):
-			candidate = self.white_pixel_extract(img, threshold=190-12*i)
-			self.line_detection(candidate, img)
+		while i < 4 and (self.image.get('lines') is None or self.image.get('lines').shape[0] < 5):
+			candidate, contours = self.white_pixel_extract(img, threshold=5+5*i)
+			self.line_detection(candidate, contours, img)
 			i += 1
-		if self.image['lines'].shape[0] < 4:
+		if self.image['lines'].shape[0] < 5:
 			print('Court Model Init Failed! Court lines not enough!')
-			return -1
-		self.M = self.model_fitting()
-		return 0
+		else:
+			self.M = self.model_fitting()
 	
-	def calculate_intersections_as_matrix(self, lines=None, normals=None, img_shape=None):
+	def calculate_intersections_as_matrix(self, lines=None):
 		'''
 		calculate intersection of lines in the standard model. If img_shape is not None, we remove intersections those are out of image box.
 		:param: slines: n * 4 matrix, a list of line (x1, y1, x2, y2)
@@ -109,28 +100,9 @@ class court_model(object):
 				if i >= j:
 					continue
 				points[i, j, 0], points[i, j, 1] = self.calculate_intersection(l1, l2)
-		if img_shape is not None:
-			pshape = points.shape
-			p0 = points[:, :, 0].reshape((pshape[0], pshape[1], 1))
-			p0 = np.where((p0 >= 0) & (p0 <= img_shape[0]), p0, -1)
-			p1 = points[:, :, 1].reshape((pshape[0], pshape[1], 1))
-			p1 = np.where((p0 >= 0) & (p0 <= img_shape[1]), p1, -1)
-			points = np.concatenate((p0, p1), axis=2)
-
-			xx = np.sum(points, axis=(1,2))
-			invalid_idx = np.argwhere(xx < 0)
-			points = np.delete(points, invalid_idx, axis=0)
-			points = np.delete(points, invalid_idx, axis=1)
-
-			lines = np.delete(lines, invalid_idx, axis=0)
-			normals = np.delete(normals, invalid_idx, axis=0)
-		hgroup, vgroup = self.line_grouping(points)
-		ngroup = np.concatenate((hgroup, vgroup), axis=0)
-		self.image['hlines'] = lines[hgroup]
-		self.image['vlines'] = lines[vgroup]
-		self.image['lines'] = lines[ngroup]
-		self.image['normal'] = normals[ngroup]
-		self.image['intersections'] = points[hgroup][:, vgroup]
+		
+		self.image['lines'] = lines
+		self.image['intersections'] = points
 
 		return
 
@@ -158,27 +130,85 @@ class court_model(object):
 		return l
 
 
-	def white_pixel_extract(self, img, threshold=185):
-		# white pixel
-		# image = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
-		# image = cv2.cvtColor(img, cv2.COLOR_BGR2YCR_CB)
-		im_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)   #转换了灰度化
-		cv2.imwrite("mediating/gray.png", im_gray, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-		retval, im_at_fixed = cv2.threshold(im_gray, threshold, 255, cv2.THRESH_BINARY) # 二值化
+	def white_pixel_extract(self, img, threshold=5):
+		h, w = img.shape[:2]
+		# 1. 找到绿色区域
+		# convert to HSV image
+		hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+		# HARD CODED COURT COLOR :(
+		court_color = np.uint8([[[123, 152, 76]]])
+
+		hsv_court_color = cv2.cvtColor(court_color, cv2.COLOR_BGR2HSV)
+		hue = hsv_court_color[0][0][0]
+
+		# define range of green color in HSV - Again HARD CODED! :(
+		lower_color = np.array([hue - threshold,40,10])
+		upper_color = np.array([hue + threshold,255,255])
+
+		# Threshold the HSV image to get only green colors
+		mask = cv2.inRange(hsv_img, lower_color, upper_color)
+		cv2.imwrite("mediating/mask.png", mask, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+
+		# 2. 框出球场的范围（凸包）contours
+		blured = cv2.blur(mask, (5, 5))
+		mask = np.zeros((h+2, w+2), np.uint8)  #掩码长和宽都比输入图像多两个像素点，满水填充不会超出掩码的非零边缘 
+		#进行泛洪填充
+		cv2.floodFill(blured, mask, (w-1,h-1), (0, 0, 0), (2,2,2),(3,3,3),8)
+		cv2.imwrite("mediating/floodfill.png", blured, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+
+		# #得到灰度图
+		# gray = cv2.cvtColor(blured,cv2.COLOR_BGR2GRAY) 
+		# cv2.imwrite("mediating/gray.png", gray) 
+		
+		#定义结构元素 
+		kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(5, 5))
+		#开闭运算，先开运算去除背景噪声，再继续闭运算填充目标内的孔洞
+		opened = cv2.morphologyEx(blured, cv2.MORPH_OPEN, kernel)
+		kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(20, 20))
+		closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel) 
+		cv2.imwrite("mediating/closed.png", closed)
+		
+		#求二值图
+		ret, binary = cv2.threshold(closed,50,255,cv2.THRESH_BINARY) 
+		cv2.imwrite("mediating/binary.png", binary) 
+		
+		# 找到轮廓
+		contours, hierarchy = cv2.findContours(binary,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+		valid_contours = np.array([cv2.contourArea(cnt) for cnt in contours])
+		valid_contours = np.argwhere(valid_contours > 300)[:, 0]
+		contours = np.array(contours)[valid_contours].tolist()
+		
+		hulls = [cv2.convexHull(cnt) for cnt in contours]
+		poly = img.copy()
+		cv2.polylines(poly, hulls, True, (0, 0, 255), 2)  # red
+		cv2.imwrite("mediating/poly.png", poly)
+		# # 绘制轮廓
+		cnt_fill = np.zeros((h, w),dtype=np.uint8)
+		cnt_fill = cv2.drawContours(cnt_fill,contours,-1,255,cv2.FILLED)
+		# cnt_fill = cv2.drawContours(cnt_fill, contours, -1, 255, 3)
+		cv2.imwrite("mediating/cnt_fill.png", cnt_fill)
+		result = cv2.bitwise_and(blured, cnt_fill)
+		result = cv2.bitwise_not(result)
+		# 绘制结果
+		cv2.imwrite("mediating/result.png", result)
+
+		# 3. 求灰度图，并二值化，找出白色像素的区域，并去掉大块的非线性的白色像素
+		# # Bitwise-AND mask and original image
+		# res = cv2.bitwise_and(img,img, mask=binary)
+		# cv2.imwrite("mediating/basketball_res.png", res, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		# cv2.imwrite("mediating/origin.png", img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+
+		# im_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+		retval, im_at_fixed = cv2.threshold(result, 50, 255, cv2.THRESH_BINARY) # 二值化
 		cv2.imwrite("mediating/im_at_fixed.png", im_at_fixed, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-
-		# lower = np.uint8([0, 170, 20])
-		# upper = np.uint8([255, 255, 255])
-		# white_mask = cv2.inRange(image, lower, upper)
-		# cv2.imwrite("mediating/mask.png", white_mask, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-
 		# remove dressed region
 		c1 = self.line_constraint(im_at_fixed, 10, 128, 20)
 		cv2.imwrite("mediating/candidate.png", c1, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 		# todo: remove textured region
 		# c2 = cv2.cornerEigenValsAndVecs(c1, 5, 3)
-		return c1
+		return c1, hulls
 
 
 	def draw_line(self, imgName, img, lines, coloridx=None):
@@ -199,7 +229,7 @@ class court_model(object):
 		cv2.imwrite(imgName, img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 
-	def is_same_line(self, normal1, normal2, athres, dthres):
+	def is_same_line(self, line1, line2, normal1, normal2, athres, dthres):
 		'''
 		given two lines "normal1" and "normal2" , if they are the same line, return true; else, return false.
 		base: ||normal1|| = ||normal2|| = 1
@@ -211,9 +241,12 @@ class court_model(object):
 		:return: true if n1T * n2 < cos(0.75C) && |d1 - d2| < 8
 				false else
 		'''
-		deltaD = abs(normal1[2] - normal2[2])
+		d11 = self.distance_point_line(line1[:2], line2)
+		d12 = self.distance_point_line(line1[2:], line2)
+		d21 = self.distance_point_line(line2[:2], line1)
+		d22 = self.distance_point_line(line2[2:], line1)
 		cosAngle = normal1[0] * normal2[0] + normal1[1] * normal2[1]
-		return cosAngle > athres and deltaD < dthres
+		return cosAngle > athres and ((d11 < dthres and d12 < dthres) or (d21 < dthres and d22 < dthres))
 
 	def calculate_normal(self, lines):
 		"""
@@ -238,36 +271,42 @@ class court_model(object):
 
 		return normal
 
-	def remove_duplicate_line(self, lines, img):
+	def remove_invalid_line(self, lines, contours):
 		'''
-		remove duplicate lines.
+		remove invalid and duplicated lines.
 		:param: lines: n * 4, a line = (x1, y1, x2, y2)
 		normal: n * 5, a normal = (n1, n2, d, k, b)
 		:return: purelines: a (m * 4) matrix, m <= n.
 			purenormals: a (m * 5) matrix
 		'''
+		# remove lines those are not in the court contours.
+		valid = np.zeros((lines.shape[0]), dtype=int)
+		for cnt in contours:
+			p1 = np.array([cv2.pointPolygonTest(cnt, (int(l[0]), int(l[1])), True) for l in lines])
+			p2 = np.array([cv2.pointPolygonTest(cnt, (int(l[2]), int(l[3])), True) for l in lines])
+			v = np.where((p1 > 0) & (p2 > 0), 1, 0)
+			valid = cv2.bitwise_or(valid, v).reshape(-1)
+		lines = lines[np.argwhere(valid == 1)[:, 0]]
+
+		# 计算法线
 		normal = self.calculate_normal(lines)
+
 		# get same-line set, if line a and line b are the same line, ufs.uf[a] = ufs.uf[b]
 		ufs = UnionFind(lines.shape[0])
-		
 		angleThres = np.cos(np.pi / 240)
 		dThres = 8
-		for i, n1 in enumerate(normal):
-			for j, n2 in enumerate(normal):
-				if i < j and self.is_same_line(n1, n2, angleThres, dThres):
+		for i in range(lines.shape[0]):
+			for j in range(lines.shape[0]):
+				if i < j and self.is_same_line(lines[i], lines[j], normal[i], normal[j], angleThres, dThres):
 					ufs.union(i + 1, j + 1)
 
-		# # draw lines, the same lines have the same color
 		ufsidx = np.array(ufs.uf)[1:] - 1
-		# print(coloridx)
-		result2 = img.copy()
-		self.draw_line("mediating/multiline.png", result2, lines, coloridx=ufsidx)
-
-		# remove duplicate lines, every color only need 1 line.
 		
+		# remove duplicate lines, every color only need 1 line.
 		pureidx = np.unique(ufsidx)
 		purelinesarray = []
 		purenormalsarray = []
+		# TODO: 修改多条线逆合成一条线的算法，斜率取均值，然后找多条线段的中心点，用中心点拟合
 		for p in pureidx:
 			tmpn = normal[np.argwhere(ufsidx == p).sum(axis=1)]
 			avgk = tmpn[:, 3].mean()
@@ -291,13 +330,11 @@ class court_model(object):
 		# get new lines 'purelines' and new normals 'purenormals'
 		purelines = np.array(purelinesarray)
 		purenormals = np.array(purenormalsarray)
-		idx = np.lexsort(purenormals[4]) #TODO: bug
-		result3 = img.copy()
-		self.draw_line("mediating/pureline.png", result3, purelines, coloridx=pureidx)
+		idx = np.lexsort(purenormals.T[:4, :])
 		return purelines[idx], purenormals[idx]
 
 	
-	def line_detection(self, img, source_image):
+	def line_detection(self, img, contours, source_image):
 		"""
 		:params: img: input image. we detecte lines from this image.
 		:return: purelines: detected lines.
@@ -325,14 +362,19 @@ class court_model(object):
 		cv2.imwrite("mediating/dilate.png", dilt, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 		# hough line detection
-		edges = cv2.Canny(dilt, 50, 200, apertureSize=3)
+		edges = cv2.Canny(dilt, 32, 200, apertureSize=3)
 		cv2.imwrite("mediating/edges.png", edges, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-		lines = cv2.HoughLinesP(edges, 1, np.pi / 360, 15, minLineLength=270, maxLineGap=20)
-		# print(lines.shape)
+		lines = cv2.HoughLinesP(edges, 1, np.pi / 360, 15, minLineLength=200, maxLineGap=30)
 
 		lines = lines.reshape((lines.shape[0], -1))
-		purelines, purenormals = self.remove_duplicate_line(lines, source_image)
-		self.calculate_intersections_as_matrix(purelines, purenormals, img_shape=img.shape)
+		result2 = source_image.copy()
+		self.draw_line("mediating/multiline.png", result2, lines)
+
+		purelines, purenormals = self.remove_invalid_line(lines, contours)
+		self.image['normal'] = purenormals
+		result3 = source_image.copy()
+		self.draw_line("mediating/pureline.png", result3, purelines)
+		self.calculate_intersections_as_matrix(purelines)
 
 		return
 
@@ -426,8 +468,11 @@ class court_model(object):
 		'''
 		x0, y0 = point[0], point[1]
 		x1, y1, x2, y2 = line[0], line[1], line[2], line[3]
-		mole = np.abs((y1 - y2) * x0 + (x1 - x2) * y0 - (x1 - x2) * (x1 + y1))
-		deno = ((y1 - y2) ** 2 + (x1 - x2) ** 2) ** .5
+		A = y1 - y2
+		B = x2 - x1
+		C = x1 * y2 - y1 * x2
+		mole = np.abs(A * x0 + B * y0 + C)
+		deno = (A ** 2 + B ** 2) ** .5
 		return mole / deno
 
 
@@ -446,7 +491,7 @@ class court_model(object):
 		dThres = 8
 		for i in range(maplines.shape[0]):
 			for j in range(imglines.shape[0]):
-				flag = self.is_same_line(mnormal[i], inormal[j], angleThres, dThres)
+				flag = self.is_same_line(maplines[i], imglines[j], mnormal[i], inormal[j], angleThres, dThres)
 				if flag is False:
 					continue
 
@@ -497,6 +542,9 @@ class court_model(object):
 				mapping_lines = self.calculate_mapping_lines(M)
 				# 5. calculate accuracy score of p, and get the most suitable one.
 				score = self.calculate_score(mapping_lines)
+				if s < score:
+					s = score
+					resM = M
 		return resM, s
 	
 	def model_fitting(self):
@@ -511,22 +559,20 @@ class court_model(object):
 		resM = np.zeros((3, 3), dtype=np.float16)
 		# get all possible line lists
 		# for each line list:
-		hidxes = np.arange(self.image['hlines'].shape[0]) - 1
-		vidxes = np.arange(self.image['vlines'].shape[0]) - 1
-
-		for h in range(hidxes):
-			for v in range(vidxes):
-				ig_points = self.get_points(np.array(h, h+1, v, v+1), type='image')
-				M1, s1 = self.model_fitting_once(ig_points)
-				ig_points = self.get_points(np.array(v, v+1, h+1, h), type='image')
-				M2, s2 = self.model_fitting_once(ig_points)
-				if s2 < s1:
-					M1 = M2
-					s1 = s2
-				if s1 < s:
-					s = s1
-					resM = M1
-					print(p, "score: ", s)
+		isx = self.image['intersections'][:, :, 0]
+		valid_points_idx = np.argwhere(isx > 0) # 找到所有非(-1, -1)的点的坐标
+		for pi in variations(np.range(valid_points_idx.shape[0]), 4):
+			p = np.array(pi)
+			xyidx = valid_points_idx[p]
+			if Counter(xyidx.flatten()).max() > 2:
+				continue
+			# TODO: 待优化，对称的组合可以去掉
+			# 找到四个点，能够组成矩形，匹配每个小框框
+			M, score = self.model_fitting_once(self.image['intersections'][xyidx[:, 0], xyidx[:, 1]])
+			if score < s:
+				s = score
+				resM = M
+				print(p, "score: ", s)
 
 		# if pi[0] == 1 and pi[1] == 2 and pi[2] == 6 and pi[3] == 7 and pi[4] == 8:
 		# 	print("---[1,2,6,7,8]: ---\n", spoints)
