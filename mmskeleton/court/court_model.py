@@ -213,11 +213,11 @@ class court_model(object):
 		return c1, hulls
 
 
-	def draw_line(self, imgName, img, lines, coloridx=None):
+	def draw_line(self, imgName, img, lines, coloridx=None, thickness=1):
 		colors = np.array([(25, 25, 112), (123, 104, 238), (0, 191, 255), (255, 218, 185), (47, 79, 79),
 					(255, 127, 0), (0, 0, 0), (139, 0, 0), (0, 205, 0), (67, 205, 128),
 					(0, 197, 205), (105, 139, 34), (139, 134, 78), (255, 193, 37), (205, 92, 92),
-					(178, 34, 34), (255, 20, 147), (139, 69, 19), (148, 0, 211), (139, 137, 137)])
+					(237, 0, 140), (178, 34, 34), (255, 20, 147), (139, 69, 19), (148, 0, 211), (139, 137, 137)])
 		n = lines.shape[0]
 		if n == 0:
 			return
@@ -227,7 +227,7 @@ class court_model(object):
 			cidx = coloridx[i]
 			x1, y1, x2, y2 = line[0], line[1], line[2], line[3]
 			r, b, g = int(colors[cidx % 20, 0]), int(colors[cidx % 20, 1]), int(colors[cidx % 20, 2])
-			cv2.line(img, (x1, y1), (x2, y2), (r, b, g), 1)
+			cv2.line(img, (x1, y1), (x2, y2), (r, b, g), thickness=thickness)
 		cv2.imwrite(imgName, img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 
@@ -258,7 +258,9 @@ class court_model(object):
 		"""
 		normal: n * 5, a normal = (n1, n2, d, k, b)
 		"""
-		if lines.shape[0] == lines.size():
+		need_flatten = False
+		if lines.shape[0] == lines.size:
+			need_flatten = True
 			lines = lines.reshape((1, lines.shape[0]))
 		# get normal: n1*x + n2 * y - d = 0
 		line0, line1, line2, line3 = lines[:, 0:1], lines[:, 1:2], lines[:, 2:3], lines[:, 3:]
@@ -276,7 +278,8 @@ class court_model(object):
 		tmp = line2 - line0
 		kb = kb / tmp
 		normal = np.concatenate((normal, kb), axis=1, dtype='float')
-
+		if need_flatten == True:
+			normal = normal.flatten()
 		return normal
 
 	def calculate_y_line(self, line, x):
@@ -469,13 +472,16 @@ class court_model(object):
 		'''
 		sl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0)
 		n = sl.shape[0]
-		point1 = np.hstack((sl[:, :2], np.ones((n, 1), dtype='int')))
-		mapping1 = np.dot(M, point1.T)
-		mapping1 = mapping1.T
-		point2 = np.hstack((sl[:, 2:], np.ones((n, 1), dtype='int')))
-		mapping2 = np.dot(M, point2.T)
-		mapping2 = mapping2.T
-		return np.concatenate((mapping1[:, :2], mapping2[:, :2]), axis=1)
+		point1 = sl[:, :2].reshape((1, n, 2))
+		point1 = point1.astype(np.float32)
+		new_point1 = cv2.perspectiveTransform(point1, M)
+		new_point1 = new_point1.reshape((n, 2))
+		point2 = sl[:, 2:].reshape((1, n, 2))
+		point2 = point2.astype(np.float32)
+		new_point2 = cv2.perspectiveTransform(point2, M)
+		new_point2 = new_point2.reshape((n, 2))
+
+		return np.concatenate((new_point1, new_point2), axis=1)
 
 
 	def distance_point_line(self, point, line):
@@ -548,7 +554,7 @@ class court_model(object):
 		points = points.reshape((4, 2))
 		return points
 	
-	def model_fitting_once(self, ig_points, score):
+	def model_fitting_once(self, ig_points, score, idxstr=None):
 		resM = 1
 		sstr = ''
 		for sh in range(3):
@@ -556,7 +562,7 @@ class court_model(object):
 				st_points = self.get_points(np.array([sh, sh+1, sv, sv+1]), type='standard')
 
 				# 3. calculate homography matrix H
-				M, mask = cv2.findHomography(ig_points, st_points, cv2.RANSAC, 3.0)
+				M, mask = cv2.findHomography(st_points, ig_points, cv2.RANSAC, 3.0)
 				if M is None:
 					continue
 				# 4. get lines from standard model using M.
@@ -567,14 +573,17 @@ class court_model(object):
 				if s < score:
 					score = s
 					resM = M
-					sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
-					sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
-					sstr = sstr + sigp + '\t' + sstp + '\t' + str(score)
-					# print(ig_points, st_points, "score: ", s)
-					# testimg = cv2.imread('mediating/pureline.png')
-					# mapping_lines = mapping_lines.astype(int)
-					# mapname = 'mapimage/' + str(sh) + '_' + str(sv) + '_' + str(s).split('.')[0] + '.png'
-					# self.draw_line(mapname, testimg, mapping_lines)
+
+				# store score to txt
+				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
+				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
+				sstr = sstr + sigp + '\t' + sstp + '\t' + str(s) + '\n'
+				# if idxstr is not None and (sh == 0 or sh == 1) and sv == 3:
+				# 	testimg = cv2.imread('mediating/pureline.png')
+				# 	mapping_lines = mapping_lines.astype(int)
+				# 	iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
+				# 	color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 15
+				# 	self.draw_line(mapname, testimg, mapping_lines, coloridx=color, thickness=3)
 		f = 'mediating/ip_sp_score.txt'
 		with open(f, 'a') as file:
 			file.write(sstr)
@@ -601,36 +610,35 @@ class court_model(object):
 			# 检查四个点是否有三点共线，如果有，则跳过
 			a = list(Counter(xyidx.flatten()).values())
 			b = Counter(xyidx.flatten()).keys()
+			
 			if a.count(2) != len(a):
 				continue
+			# TODO: 检查四个点构成的凸包是否四个边对应四条检测的线，如果不是，则跳过
+			# # eg. 1 3对边，2 4对边，xyidx = [[1, 3], [2, 4], [3, 4], [1, 2]]
+			# a = list(Counter(xyidx[:, 0]).values())
+			# if a.count(2) != len(a):
+			# 	continue
 
 			# 检查四个点是否构成凸包，如果不是，则跳过
 			points = self.image['intersections'][xyidx[:, 0], xyidx[:, 1]]
 			hull = cv2.convexHull(points, clockwise=False, returnPoints=True)
-			points = hull.reshape((4, -1))
 			if hull.shape[0] < 4:
 				continue
 			
-			# 检查四个点构成的凸包是否四个边对应四条检测的线，如果不是，则跳过
-			hullline1 = np.concatenate(points[0], points[1]).reshape((-1))
-			hullline2 = np.concatenate(points[1], points[2]).reshape((-1))
-			valid_rect = 0
-			for i in b:
-				if self.is_same_line(hullline1, self.image['lines'][i]) == True or self.is_same_line(hullline2, self.image['lines'][i]) == True:
-					valid_rect += 1
-			if valid_rect < 2:
-				continue
 			# 找到四个点，能够组成矩形，匹配每个小框框
-			print(xyidx)
+			points = hull.reshape((4, -1))
+			idxstr = ''.join(np.array2string(xyidx, separator='_').splitlines())
 			for i in range(4):
-				M, s = self.model_fitting_once(points, score)
+				iname = idxstr + '_' + str(i)
+				M, s = self.model_fitting_once(points, score, iname)
 				if s < score:
 					resM = M
 					score = s
+					print(xyidx)
 				points = points[[1, 2, 3, 0]]
 		print(resM)
 		return resM, score
-
+ 
 	def init_court_model(self, img):
 		"""
 		init court model from image
