@@ -508,6 +508,14 @@ class court_model(object):
 		:params: maplines: using homography M, we map the standard_line to image, n * (x1, y1, x2, y2)
 		:return: score: this mapping's score. We like lower score.
 		'''
+		# TODO: 计算分数，
+		# 1. 对于每条线，查看是否匹配
+		# 2. 如果匹配，则进入第三步；否则，转回第一步
+		# 3. 检查长度imgline < mapline是否成立，如果成立，进入第四步；否则转回第一步
+		# 4. match_line += 1
+		# 5. 两条线的左右端点相互对应，对每个imgline的像素ipx，根据比例求对应的mapline上的像素mpx
+		# 6. 计算dis(ipx, mpx)，并求和，作为score
+		# 7. 检查匹配的match_line > 4? 如果不是，则返回本次匹配不成功；是则返回成功score
 		imglines = self.image['lines']
 		inormal = self.image['normals']
 		mnormal = self.calculate_normal(maplines)
