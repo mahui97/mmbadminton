@@ -394,8 +394,11 @@ class court_model(object):
 
 		purelines, purenormals = self.remove_invalid_line(lines, contours)
 		self.image['normals'] = purenormals
+		
 		result3 = source_image.copy()
-		self.draw_line("mediating/pureline.png", result3, purelines)
+		pl = np.concatenate((purelines, self.standard['hlines'], self.standard['vlines']), axis=0)
+		self.draw_line("mediating/pureline.png", result3, pl)
+		
 		self.calculate_intersections_as_matrix(purelines)
 
 		return
@@ -547,13 +550,22 @@ class court_model(object):
 		for i in range(maplines.shape[0]):
 			for j in range(imglines.shape[0]):
 				flag = self.is_same_line(maplines[i], imglines[j], mnormals[i], inormals[j], angleThres, dThres)
-				if flag == False or self.line_length(maplines[i]) < self.line_length(imglines[j]):
+				# mapline和imgline可能是一条线，才可以继续
+				if flag == False:
 					continue
-				map_count[j] = 1
-
+				# mapline的长度必须比imgline长
+				if self.line_length(maplines[i]) < self.line_length(imglines[j]):
+					continue
+				
 				il = imglines[j, [2, 3, 0, 1]] if imglines[j, 0] > imglines[j, 2] else imglines[j]
 				ml = maplines[i, [2, 3, 0, 1]] if maplines[i, 0] > maplines[i, 2] else maplines[i]
 
+				# mapline的左右端点必须在imgline的外侧
+				if ml[2] < il[2] or ml[0] > il[0]:
+					continue
+				map_count[j] = 1
+
+				# TODO: 修改score计算方式，不全部利用mapline的点，而只使用il对应的点
 				ipxx = np.arange(il[0], il[2]+1, 1)
 				ipxy = self.calculate_y_line(il, ipxx)
 
@@ -613,11 +625,26 @@ class court_model(object):
 				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
 				sstr = sstr + sigp + '\t' + sstp + '\t' + str(s) + '\n'
 
-				# testimg = cv2.imread('mediating/pureline.png')
-				# mapping_lines = mapping_lines.astype(int)
-				# iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
-				# color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 15
-				# self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=3)
+				testimg = cv2.imread('mediating/pureline.png')
+				i = 3
+				for j in range(4):
+					cv2.circle(testimg, st_points[j], i, (0, 0, 255), thickness=-1)
+					i += 2
+				i = 3
+				for j in range(4):
+					cv2.circle(testimg, ig_points[j], i, (0, 255, 0), thickness=-1)
+					i += 2
+				tmp = st_points.reshape((1, 4, 2)).astype(np.float32)
+				mp_points = cv2.perspectiveTransform(tmp, M)
+				mp_points = mp_points.reshape((4, 2)).astype(int)
+				i = 5
+				for j in range(4):
+					cv2.circle(testimg, mp_points[j], i, (255, 0, 0), thickness=2)
+					i += 3
+				mapping_lines = mapping_lines.astype(int)
+				iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
+				color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 15
+				self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
 		f = 'mediating/ip_sp_score.txt'
 		with open(f, 'a') as file:
 			file.write(sstr)
@@ -685,18 +712,6 @@ class court_model(object):
 			self.draw_line(iname, testimg, maplines, coloridx=color, thickness=3)
 		return Ms[n-1], scores[n-1]
  
-	def init_court_model(self, img):
-		"""
-		init court model from image
-		:return: M: homography. image(u, v, w) = M \dot standard(x, y, 1)^T
-		"""
-
-		result4 = img.copy()
-		M, score = self.model_fitting(self.image['lines'])
-		perspective = cv2.warpPerspective(result4, M, (result4.shape[1], result4.shape[0]))
-		cv2.imwrite("mediating/suitable.png", perspective, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-
-		return M
 
 	def is_in_court(self, ankle_points, M):
 		"""
@@ -718,4 +733,3 @@ class court_model(object):
 		return in_standard(mapping1[0, :]) and in_standard(mapping1[1, :])
 # ----------------- END ----------------------
 
-# cv2.waitKey(500000)
