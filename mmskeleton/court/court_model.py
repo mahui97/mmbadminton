@@ -1,14 +1,10 @@
 from typing import Counter
 import cv2
 import numpy as np
-import math
-import matplotlib
-from PIL import Image
-from matplotlib.pyplot import imshow
-from matplotlib import pyplot as plt
-from numpy.lib.type_check import imag
+from numpy.lib.arraysetops import intersect1d
 from sympy.utilities.iterables import multiset_permutations, subsets, variations
 
+INT_MAX = 2 ** 31
 class UnionFind(object):
 	def __init__(self, n):
 		self.uf = [i for i in range(n + 1)]
@@ -283,12 +279,16 @@ class court_model(object):
 		return normal
 
 	def calculate_y_line(self, line, x):
+		x_type = type(x)
 		x1, y1, x2, y2 = line[:4]
 		A = y1 - y2
 		B = x2 - x1
 		C = x1 * y2 - x2 * y1
+		avgy = (y1 + y2) / 2
 		if B == 0:
-			return (y1 + y2) / 2
+			if x_type == np.ndarray:
+				return np.ones((x.shape)) * avgy
+			return avgy
 		return -(A * x + C) / B
 
 	def merge_same_lines(self, lines, normals, ufsidx):
@@ -500,6 +500,27 @@ class court_model(object):
 		deno = (A ** 2 + B ** 2) ** .5
 		return mole / deno
 
+	def line_length(self, lines):
+		"""
+		calculate lines' length. 
+		:params: lines: (n, 4) matrix or (4,) array. 
+		:return: length: if lines is (n, 4) matrix, length = (n, 1) matrix;
+						else, length is a float
+		"""
+		is_single_line = False
+		length = 0
+		# only one line
+		if lines.shape[0] == lines.size:
+			lines = lines.reshape((1, lines.shape[0]))
+			is_single_line = True
+		# multi lines
+		x1, y1, x2, y2 = lines[:, 0], lines[:, 1], lines[:, 2], lines[:, 3]
+		length = (np.abs(x2 - x1) ** 2 + np.abs(y2 - y1) ** 2) ** .5
+		
+		if is_single_line == True:
+			return np.sum(length)
+		return length
+
 
 	def calculate_score(self, maplines):
 		'''
@@ -508,39 +529,45 @@ class court_model(object):
 		:params: maplines: using homography M, we map the standard_line to image, n * (x1, y1, x2, y2)
 		:return: score: this mapping's score. We like lower score.
 		'''
-		# TODO: 计算分数，
+		# 计算分数，
 		# 1. 对于每条线，查看是否匹配
 		# 2. 如果匹配，则进入第三步；否则，转回第一步
 		# 3. 检查长度imgline < mapline是否成立，如果成立，进入第四步；否则转回第一步
 		# 4. match_line += 1
 		# 5. 两条线的左右端点相互对应，对每个imgline的像素ipx，根据比例求对应的mapline上的像素mpx
 		# 6. 计算dis(ipx, mpx)，并求和，作为score
-		# 7. 检查匹配的match_line > 4? 如果不是，则返回本次匹配不成功；是则返回成功score
+		# 7. 检查匹配的match_line > 4? 如果不是 ，则返回本次匹配不成功；是则返回成功score
 		imglines = self.image['lines']
-		inormal = self.image['normals']
-		mnormal = self.calculate_normal(maplines)
+		inormals = self.image['normals']
+		mnormals = self.calculate_normal(maplines)
 		score = 0
-		angleThres = np.cos(np.pi / 240)
-		dThres = 8
+		map_count = np.zeros((imglines.shape[0]+1), dtype='int8') # 有多少条线匹配
+		angleThres = np.cos(np.pi / 120)
+		dThres = 14
 		for i in range(maplines.shape[0]):
 			for j in range(imglines.shape[0]):
-				flag = self.is_same_line(maplines[i], imglines[j], mnormal[i], inormal[j], angleThres, dThres)
-				if flag is False:
+				flag = self.is_same_line(maplines[i], imglines[j], mnormals[i], inormals[j], angleThres, dThres)
+				if flag == False or self.line_length(maplines[i]) < self.line_length(imglines[j]):
 					continue
+				map_count[j] = 1
 
-				il, ml = imglines[j], maplines[i]
-				iA = il[1] - il[3]
-				iB = il[0] - il[2]
-				iC = il[1] * il[2] - il[0] * il[3]
-				mA = ml[1] - ml[3]
-				mB = ml[0] - ml[2]
-				mC = ml[1] * ml[2] - ml[0] * ml[3]
-				deno = (mA ** 2 + mB ** 2) ** .5
-				for x0 in range(il[0], il[2] + 1):
-					y0 = -(iA * x0 + iC) / iB
-					mole = np.abs(mA * x0 + mB * y0 + mC)
-					score += (mole / deno)
-		return score
+				il = imglines[j, [2, 3, 0, 1]] if imglines[j, 0] > imglines[j, 2] else imglines[j]
+				ml = maplines[i, [2, 3, 0, 1]] if maplines[i, 0] > maplines[i, 2] else maplines[i]
+
+				ipxx = np.arange(il[0], il[2]+1, 1)
+				ipxy = self.calculate_y_line(il, ipxx)
+
+				mpxx = self.calculate_y_line(np.array([il[0], ml[0], il[2], ml[2]]), ipxx)
+				mpxy = self.calculate_y_line(ml, mpxx)
+
+				match_points = np.vstack((ipxx, ipxy, mpxx, mpxy)).T
+				length = self.line_length(match_points)
+				score += np.sum(length)
+		mc = np.sum(map_count)
+		if mc == 0:
+			return score, mc
+		# score = 平均每条线的距离
+		return score / mc, mc
 
 
 	def line_grouping(self, intersections):
@@ -562,8 +589,7 @@ class court_model(object):
 		points = points.reshape((4, 2))
 		return points
 	
-	def model_fitting_once(self, ig_points, score, idxstr=None):
-		resM = 1
+	def model_fitting_once(self, ig_points, scores, Ms, idxstr=None):
 		sstr = ''
 		for sh in range(3):
 			for sv in range(4):
@@ -577,25 +603,25 @@ class court_model(object):
 				# for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
 				mapping_lines = self.calculate_mapping_lines(M)
 				# 5. calculate accuracy score of p, and get the most suitable one.
-				s = self.calculate_score(mapping_lines)
-				if s < score:
-					score = s
-					resM = M
+				s, m_count = self.calculate_score(mapping_lines)
+				if s < scores[m_count]:
+					scores[m_count] = s
+					Ms[m_count] = M
 
 				# store score to txt
 				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
 				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
 				sstr = sstr + sigp + '\t' + sstp + '\t' + str(s) + '\n'
-				# if idxstr is not None and (sh == 0 or sh == 1) and sv == 3:
-				# 	testimg = cv2.imread('mediating/pureline.png')
-				# 	mapping_lines = mapping_lines.astype(int)
-				# 	iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
-				# 	color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 15
-				# 	self.draw_line(mapname, testimg, mapping_lines, coloridx=color, thickness=3)
+
+				# testimg = cv2.imread('mediating/pureline.png')
+				# mapping_lines = mapping_lines.astype(int)
+				# iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
+				# color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 15
+				# self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=3)
 		f = 'mediating/ip_sp_score.txt'
 		with open(f, 'a') as file:
 			file.write(sstr)
-		return resM, score
+		return scores, Ms
 	
 	def model_fitting(self):
 		'''
@@ -604,9 +630,9 @@ class court_model(object):
 		:param: points: points[i, j] = intersection point of line i and line j
 		:return:
 		'''
-
-		score = 2147483647
-		resM = 1
+		n = self.image['lines'].shape[0]
+		scores = np.ones((n+1)) * INT_MAX
+		Ms = np.ones((n+1, 3, 3))
 		# get all possible line lists
 		# for each line list:
 		isx = self.image['intersections'][:, :, 0]
@@ -617,35 +643,47 @@ class court_model(object):
 
 			# 检查四个点是否有三点共线，如果有，则跳过
 			a = list(Counter(xyidx.flatten()).values())
-			b = Counter(xyidx.flatten()).keys()
 			
 			if a.count(2) != len(a):
 				continue
-			# TODO: 检查四个点构成的凸包是否四个边对应四条检测的线，如果不是，则跳过
-			# # eg. 1 3对边，2 4对边，xyidx = [[1, 3], [2, 4], [3, 4], [1, 2]]
-			# a = list(Counter(xyidx[:, 0]).values())
-			# if a.count(2) != len(a):
-			# 	continue
-
+			
 			# 检查四个点是否构成凸包，如果不是，则跳过
 			points = self.image['intersections'][xyidx[:, 0], xyidx[:, 1]]
 			hull = cv2.convexHull(points, clockwise=False, returnPoints=True)
 			if hull.shape[0] < 4:
 				continue
-			
-			# 找到四个点，能够组成矩形，匹配每个小框框
 			points = hull.reshape((4, -1))
+			
+			# TODO: 检查四个点构成的凸包是否四个边对应四条检测的线，如果不是，则跳过
+			# eg. 1 3对边，2 points = [[1, 3], [2, 4], [3, 4], [1, 2]]
+			intersect = self.image['intersections']
+			hidx = np.where((intersect[:, :, 0].ravel()==points[:, 0][:, None]) & (intersect[:, :, 1].ravel()==points[:, 1][:, None]))[-1].reshape(-1, 1)
+			hullidx = np.concatenate([hidx // n, hidx % n], axis=1)
+			ctn = False
+			for i in range(4):
+				a = Counter(hullidx[[i, (i+1) % 4]].flatten()).keys()
+				if len(a) != 3:
+					ctn = True
+					break
+			if ctn == True:
+				continue
+			# 找到四个点，能够组成矩形，匹配每个小框框
+			
 			idxstr = ''.join(np.array2string(xyidx, separator='_').splitlines())
 			for i in range(4):
 				iname = idxstr + '_' + str(i)
-				M, s = self.model_fitting_once(points, score, iname)
-				if s < score:
-					resM = M
-					score = s
-					print(xyidx)
+				scores, Ms = self.model_fitting_once(points, scores, Ms, iname)
 				points = points[[1, 2, 3, 0]]
-		print(resM)
-		return resM, score
+			
+			# TODO: 选取最佳模型策略
+		for i in range(Ms.shape[0]):
+			maplines = self.calculate_mapping_lines(Ms[i])
+			testimg = cv2.imread('mediating/pureline.png')
+			maplines = maplines.astype(int)
+			iname = 'mediating/' + str(i) + '.png'
+			color = np.ones((maplines.shape[0]), dtype='uint8') * 15
+			self.draw_line(iname, testimg, maplines, coloridx=color, thickness=3)
+		return Ms[n-1], scores[n-1]
  
 	def init_court_model(self, img):
 		"""
