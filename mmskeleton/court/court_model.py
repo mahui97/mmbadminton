@@ -607,23 +607,22 @@ class court_model(object):
 			for sv in range(4):
 				st_points = self.get_points(np.array([sh, sh+1, sv, sv+1]), type='standard')
 
+				# store score to txt
+				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
+				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
+				
+				if '[[0_2]_ [0_3]_ [1_2]_ [1_3]]' in idxstr and (sv == 0 or sv == 3):
+					print(sstr)
+
 				# 3. calculate homography matrix H
-				M, mask = cv2.findHomography(st_points, ig_points, cv2.RANSAC, 3.0)
+				M = cv2.getPerspectiveTransform(np.float32(st_points), np.float32(ig_points))
 				if M is None:
 					continue
 				# 4. get lines from standard model using M.
 				# for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
 				mapping_lines = self.calculate_mapping_lines(M)
-				# 5. calculate accuracy score of p, and get the most suitable one.
-				s, m_count = self.calculate_score(mapping_lines)
-				if s < scores[m_count]:
-					scores[m_count] = s
-					Ms[m_count] = M
-
-				# store score to txt
-				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
-				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
-				sstr = sstr + sigp + '\t' + sstp + '\t' + str(s) + '\n'
+				
+				
 
 				testimg = cv2.imread('mediating/pureline.png')
 				i = 3
@@ -645,6 +644,16 @@ class court_model(object):
 				iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
 				color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 15
 				self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
+
+				# 5. calculate accuracy score of p, and get the most suitable one.
+				s, m_count = self.calculate_score(mapping_lines)
+				if s < scores[m_count]:
+					scores[m_count] = s
+					Ms[m_count] = M
+				
+				sstr = sstr + sigp + '\t' + sstp + '\t' + str(s) + '\n'
+
+				
 		f = 'mediating/ip_sp_score.txt'
 		with open(f, 'a') as file:
 			file.write(sstr)
