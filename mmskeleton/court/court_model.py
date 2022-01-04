@@ -387,6 +387,8 @@ class court_model(object):
 		edges = cv2.Canny(dilt, 32, 200, apertureSize=3)
 		cv2.imwrite("mediating/edges.png", edges, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 		lines = cv2.HoughLinesP(edges, 1, np.pi / 360, 15, minLineLength=200, maxLineGap=30)
+		if lines is None:
+			return
 
 		lines = lines.reshape((lines.shape[0], -1))
 		result2 = source_image.copy()
@@ -610,7 +612,7 @@ class court_model(object):
 				# store score to txt
 				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
 				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
-				
+				  
 				if '[[0_2]_ [0_3]_ [1_2]_ [1_3]]' in idxstr and (sv == 0 or sv == 3):
 					print(sstr)
 
@@ -622,8 +624,6 @@ class court_model(object):
 				# for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
 				mapping_lines = self.calculate_mapping_lines(M)
 				
-				
-
 				testimg = cv2.imread('mediating/pureline.png')
 				i = 3
 				for j in range(4):
@@ -722,7 +722,7 @@ class court_model(object):
 		return Ms[n-1], scores[n-1]
  
 
-	def is_in_court(self, ankle_points, M):
+	def in_court(self, ankle_points):
 		"""
 		we have a standard model defined by standard_lines and a homography M. 
 		We calculate a point whether in this court or not.
@@ -732,13 +732,13 @@ class court_model(object):
 				false else
 		"""
 
-		point1 = np.hstack((ankle_points, np.ones((2, 1), dtype='int')))
-		mapping1 = np.dot(M, point1.T).T
-		mapping1 = mapping1[:, :2]
-		def in_standard(point):
-			x0, y0 = point[0], point[1]
-			return x0 <= 205 and x0 >= 14 and y0 <= 450 and y0 >= 14
-		
-		return in_standard(mapping1[0, :]) and in_standard(mapping1[1, :])
+		# point1 = np.hstack((ankle_points, np.ones((2, 1), dtype='int')))
+		# mapping1 = np.dot(M, point1.T).T
+		# mapping1 = mapping1[:, :2]
+		# def in_standard(point):
+		# 	x0, y0 = point[0], point[1]
+		# 	return x0 <= 205 and x0 >= 14 and y0 <= 450 and y0 >= 14
+		return True
+		# return in_standard(mapping1[0, :]) and in_standard(mapping1[1, :])
 # ----------------- END ----------------------
 
