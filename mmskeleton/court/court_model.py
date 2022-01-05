@@ -1,7 +1,7 @@
 from typing import Counter
 import cv2
 import numpy as np
-from numpy.lib.arraysetops import intersect1d
+from scipy import optimize
 from sympy.utilities.iterables import multiset_permutations, subsets, variations
 
 INT_MAX = 2 ** 31
@@ -57,6 +57,8 @@ class court_model(object):
 		self.standard['indexes'] = np.arange(12)
 		self.calculate_intersections_as_matrix()
 
+		self.imgshape = img.shape
+
 		self.image = dict()
 		i = 0
 		while i < 4 and (self.image.get('lines') is None or self.image.get('lines').shape[0] < 5):
@@ -68,7 +70,7 @@ class court_model(object):
 		else:
 			self.M, self.score = self.model_fitting()
 			pers = cv2.warpPerspective(img, self.M, (img.shape[1], img.shape[0]))
-			cv2.imwrite("mediating/perspective.png", pers, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+			cv2.imwrite("mediating/30_perspective.png", pers, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 	
 	def calculate_intersections_as_matrix(self, lines=None):
 		'''
@@ -146,14 +148,14 @@ class court_model(object):
 
 		# Threshold the HSV image to get only green colors
 		mask = cv2.inRange(hsv_img, lower_color, upper_color)
-		cv2.imwrite("mediating/mask.png", mask, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		cv2.imwrite("mediating/1_mask.png", mask, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 		# 2. 框出球场的范围（凸包）contours
 		blured = cv2.blur(mask, (5, 5))
 		mask = np.zeros((h+2, w+2), np.uint8)  #掩码长和宽都比输入图像多两个像素点，满水填充不会超出掩码的非零边缘 
 		#进行泛洪填充
 		cv2.floodFill(blured, mask, (w-1,h-1), (0, 0, 0), (2,2,2),(3,3,3),8)
-		cv2.imwrite("mediating/floodfill.png", blured, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		cv2.imwrite("mediating/2_floodfill.png", blured, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 		# #得到灰度图
 		# gray = cv2.cvtColor(blured,cv2.COLOR_BGR2GRAY) 
@@ -165,11 +167,11 @@ class court_model(object):
 		opened = cv2.morphologyEx(blured, cv2.MORPH_OPEN, kernel)
 		kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(20, 20))
 		closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel) 
-		cv2.imwrite("mediating/closed.png", closed)
+		cv2.imwrite("mediating/3_losed.png", closed)
 		
 		#求二值图
 		ret, binary = cv2.threshold(closed,50,255,cv2.THRESH_BINARY) 
-		cv2.imwrite("mediating/binary.png", binary) 
+		cv2.imwrite("mediating/4_binary.png", binary) 
 		
 		# 找到轮廓
 		contours, hierarchy = cv2.findContours(binary,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
@@ -180,29 +182,29 @@ class court_model(object):
 		hulls = [cv2.convexHull(cnt) for cnt in contours]
 		poly = img.copy()
 		cv2.polylines(poly, hulls, True, (0, 0, 255), 2)  # red
-		cv2.imwrite("mediating/poly.png", poly)
+		cv2.imwrite("mediating/5_poly.png", poly)
 		# # 绘制轮廓
 		cnt_fill = np.zeros((h, w),dtype=np.uint8)
 		cnt_fill = cv2.drawContours(cnt_fill,contours,-1,255,cv2.FILLED)
 		# cnt_fill = cv2.drawContours(cnt_fill, contours, -1, 255, 3)
-		cv2.imwrite("mediating/cnt_fill.png", cnt_fill)
+		cv2.imwrite("mediating/6_cnt_fill.png", cnt_fill)
 		result = cv2.bitwise_and(blured, cnt_fill)
 		result = cv2.bitwise_not(result)
 		# 绘制结果
-		cv2.imwrite("mediating/result.png", result)
+		cv2.imwrite("mediating/7_result.png", result)
 
 		# 3. 求灰度图，并二值化，找出白色像素的区域，并去掉大块的非线性的白色像素
 		# # Bitwise-AND mask and original image
 		# res = cv2.bitwise_and(img,img, mask=binary)
-		# cv2.imwrite("mediating/basketball_res.png", res, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-		# cv2.imwrite("mediating/origin.png", img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		# cv2.imwrite("mediating/8_basketball_res.png", res, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		# cv2.imwrite("mediating/9_origin.png", img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 		# im_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
 		retval, im_at_fixed = cv2.threshold(result, 50, 255, cv2.THRESH_BINARY) # 二值化
-		cv2.imwrite("mediating/im_at_fixed.png", im_at_fixed, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		cv2.imwrite("mediating/10_im_at_fixed.png", im_at_fixed, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 		# remove dressed region
 		c1 = self.line_constraint(im_at_fixed, 10, 128, 20)
-		cv2.imwrite("mediating/candidate.png", c1, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		cv2.imwrite("mediating/11_candidate.png", c1, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 		# todo: remove textured region
 		# c2 = cv2.cornerEigenValsAndVecs(c1, 5, 3)
@@ -211,7 +213,7 @@ class court_model(object):
 
 	def draw_line(self, imgName, img, lines, coloridx=None, thickness=1):
 		colors = np.array([(25, 25, 112), (123, 104, 238), (0, 191, 255), (255, 218, 185), (47, 79, 79),
-					(255, 127, 0), (0, 0, 0), (139, 0, 0), (0, 205, 0), (67, 205, 128),
+					(255, 127, 0), (0, 255, 0), (139, 0, 0), (0, 205, 0), (67, 205, 128),
 					(0, 197, 205), (105, 139, 34), (139, 134, 78), (255, 193, 37), (205, 92, 92),
 					(237, 0, 140), (178, 34, 34), (255, 20, 147), (139, 69, 19), (148, 0, 211), (139, 137, 137)])
 		n = lines.shape[0]
@@ -372,7 +374,7 @@ class court_model(object):
 			temp = cv2.subtract(mask, temp)
 			skel = cv2.bitwise_or(skel, temp)
 			mask = eroded.copy()
-		cv2.imwrite("mediating/skel.png", skel, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		cv2.imwrite("mediating/20_skel.png", skel, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 		# # option: dilate + erode
 		# closed = cv2.morphologyEx(skel, cv2.MORPH_CLOSE, kernel)
@@ -381,25 +383,25 @@ class court_model(object):
 		# option: dilate
 		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 		dilt = cv2.dilate(skel, kernel, iterations=1)
-		cv2.imwrite("mediating/dilate.png", dilt, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		cv2.imwrite("mediating/21_dilate.png", dilt, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 		# hough line detection
 		edges = cv2.Canny(dilt, 32, 200, apertureSize=3)
-		cv2.imwrite("mediating/edges.png", edges, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		cv2.imwrite("mediating/22_edges.png", edges, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 		lines = cv2.HoughLinesP(edges, 1, np.pi / 360, 15, minLineLength=200, maxLineGap=30)
 		if lines is None:
 			return
 
 		lines = lines.reshape((lines.shape[0], -1))
 		result2 = source_image.copy()
-		self.draw_line("mediating/multiline.png", result2, lines)
+		self.draw_line("mediating/23_multiline.png", result2, lines)
 
 		purelines, purenormals = self.remove_invalid_line(lines, contours)
 		self.image['normals'] = purenormals
 		
 		result3 = source_image.copy()
 		pl = np.concatenate((purelines, self.standard['hlines'], self.standard['vlines']), axis=0)
-		self.draw_line("mediating/pureline.png", result3, pl)
+		self.draw_line("mediating/24_pureline.png", result3, pl)
 		
 		self.calculate_intersections_as_matrix(purelines)
 
@@ -475,18 +477,69 @@ class court_model(object):
 		:params: idxes: standard line indexes we need to map.
 		:return: lines: n * (x1, y1, x2, y2), mapping lines to the image.
 		'''
+		# 求解有效的maplines
+		# 1. new_points1(x, y, z) = M · points1(u, v, 1)
+		# 2. 求解线性规划
+
+		def get_3d_points(src, M):
+			'''
+			:params: src: n points, (n, 2) matrix.
+			:return: dst: n points, (n, 3) matrix.
+			'''
+			n = src.shape[0]
+			point1 = np.concatenate((src, np.ones((n, 1))), axis=1).T
+			point1 = point1.astype(np.float32)
+			dst = np.matmul(M, point1).T
+			return dst
+		
 		sl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0)
 		n = sl.shape[0]
-		point1 = sl[:, :2].reshape((1, n, 2))
-		point1 = point1.astype(np.float32)
-		new_point1 = cv2.perspectiveTransform(point1, M)
-		new_point1 = new_point1.reshape((n, 2))
-		point2 = sl[:, 2:].reshape((1, n, 2))
-		point2 = point2.astype(np.float32)
-		new_point2 = cv2.perspectiveTransform(point2, M)
-		new_point2 = new_point2.reshape((n, 2))
+		
+		pt1 = get_3d_points(sl[:, :2], M)
+		pt2 = get_3d_points(sl[:, 2:], M)
 
-		return np.concatenate((new_point1, new_point2), axis=1)
+		w, h = self.imgshape[:2]
+		X = np.array([[0, 0, 1], [w, 0, 1], [0, h, 1], [w, h, 1]], dtype=np.float32)
+		A = -np.matmul(pt1 - pt2, X.T)
+		B = np.matmul(pt2, X.T)
+		lamb = np.zeros((n, 2))
+		for i in range(n):
+			a, b = A[i], B[i]
+			res1 = optimize.linprog(np.array([1]), A_ub=a.reshape((4, 1)), b_ub=b, bounds=(0, 1))
+			res2 = optimize.linprog(np.array([-1]), A_ub=a.reshape((4, 1)), b_ub=b, bounds=(0, 1))
+			
+			lamb[i] = [res1.fun, -res2.fun]
+		
+		def valid_new_points(pt1, pt2, lmd):
+			'''
+			:params: pt1: (n, 3) matrix
+			:params: pt2: (n, 3) matrix
+			:params: lmd: (n,) matrix
+			:return: newpt: (n, 3) matrix.	newpt = lmd * pt1 + (1 - lmd) * pt2
+			'''
+			if lmd is None:
+				return None
+			lmd = lmd.reshape((lmd.size, 1))
+			l1 = np.concatenate((lmd, lmd, lmd), axis=1)
+			l2 = 1 - l1
+			newpt = np.multiply(pt1, l1) + np.multiply(pt2, l2)
+
+			x, y, z = newpt[:, 0], newpt[:, 1], newpt[:, 2]
+			x = x / z
+			y = y / z
+			dst = np.vstack((x, y)).T
+			return dst
+		
+		# remove invalid lines
+		valid_idx = np.argwhere((lamb[:, 0] <= lamb[:, 1]) & (lamb[:, 0] > 0))[:, 0]
+		lamb = lamb[valid_idx]
+		pt1 = pt1[valid_idx]
+		pt2 = pt2[valid_idx]
+
+		newpt1 = valid_new_points(pt1, pt2, lamb[:, 0])
+		newpt2 = valid_new_points(pt1, pt2, lamb[:, 1])
+
+		return np.concatenate((newpt1, newpt2), axis=1)
 
 
 	def distance_point_line(self, point, line):
@@ -613,18 +666,19 @@ class court_model(object):
 				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
 				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
 				  
-				if '[[0_2]_ [0_3]_ [1_2]_ [1_3]]' in idxstr and (sv == 0 or sv == 3):
+				if '[[0_4]_ [0_5]_ [2_4]_ [2_5]]_3' in idxstr and sv == 3 and sh == 1:
 					print(sstr)
 
 				# 3. calculate homography matrix H
 				M = cv2.getPerspectiveTransform(np.float32(st_points), np.float32(ig_points))
+
 				if M is None:
 					continue
 				# 4. get lines from standard model using M.
 				# for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
 				mapping_lines = self.calculate_mapping_lines(M)
 				
-				testimg = cv2.imread('mediating/pureline.png')
+				testimg = cv2.imread('mediating/24_pureline.png')
 				i = 3
 				for j in range(4):
 					cv2.circle(testimg, st_points[j], i, (0, 0, 255), thickness=-1)
@@ -643,6 +697,8 @@ class court_model(object):
 				mapping_lines = mapping_lines.astype(int)
 				iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
 				color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 15
+				# color[4] = 6
+				# color[5] = 6
 				self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
 
 				# 5. calculate accuracy score of p, and get the most suitable one.
@@ -653,7 +709,6 @@ class court_model(object):
 				
 				sstr = sstr + sigp + '\t' + sstp + '\t' + str(s) + '\n'
 
-				
 		f = 'mediating/ip_sp_score.txt'
 		with open(f, 'a') as file:
 			file.write(sstr)
