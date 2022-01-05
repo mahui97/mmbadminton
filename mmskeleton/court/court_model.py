@@ -5,6 +5,7 @@ from scipy import optimize
 from sympy.utilities.iterables import multiset_permutations, subsets, variations
 
 INT_MAX = 2 ** 31
+Epsilon = 1e-7
 class UnionFind(object):
 	def __init__(self, n):
 		self.uf = [i for i in range(n + 1)]
@@ -483,32 +484,53 @@ class court_model(object):
 
 		def get_3d_points(src, M):
 			'''
-			:params: src: n points, (n, 2) matrix.
-			:return: dst: n points, (n, 3) matrix.
+			:params: src: n points, (n, 2) matrix. point = (u, v)
+			:return: dst: n points, (n, 3) matrix. point = (x, y, z)
 			'''
 			n = src.shape[0]
 			point1 = np.concatenate((src, np.ones((n, 1))), axis=1).T
 			point1 = point1.astype(np.float32)
 			dst = np.matmul(M, point1).T
+
+			# garentee z >= 1, ignore z  when |z| <= Epsilon
+			z_min = np.min(np.abs(dst), axis=1)[2]
+			if z_min >= -Epsilon and z_min <= Epsilon:
+				dst = dst * np.reciprocal(Epsilon)
+			elif z_min < 1:
+				dst = dst * np.reciprocal(z_min)
+			
 			return dst
 		
-		sl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0)
+		sl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0) # n * 4
 		n = sl.shape[0]
 		
 		pt1 = get_3d_points(sl[:, :2], M)
 		pt2 = get_3d_points(sl[:, 2:], M)
+		pt2_1 = pt2 - pt1
 
+		# constrain
+		# variable: a1, a2, a3, a4, lmd
+		# for each p1, p2:
+		# a1 * u1 + a2 * u2 + a3 * u3 + a4 * u4 = lmd * p1 + (1 - lmd) * p2
+		# a1 + a2 + a3 + a4 >= 1
+		# lmd <= 1
+		# a1, a2, a3, a4, lmd >= 0
 		w, h = self.imgshape[:2]
-		X = np.array([[0, 0, 1], [w, 0, 1], [0, h, 1], [w, h, 1]], dtype=np.float32)
-		A = -np.matmul(pt1 - pt2, X.T)
-		B = np.matmul(pt2, X.T)
+		X = np.array([[0, 0, 1], [h, 0, 1], [0, w, 1], [h, w, 1]], dtype=np.float32)
+		A_ub = np.array([[0, 0, 0, 0, 1], [-1, -1, -1, -1, 0]])
+		b_ub = np.array([1, -1])
 		lamb = np.zeros((n, 2))
+		valid = np.ones((n), dtype=np.int8)
 		for i in range(n):
-			a, b = A[i], B[i]
-			res1 = optimize.linprog(np.array([1]), A_ub=a.reshape((4, 1)), b_ub=b, bounds=(0, 1))
-			res2 = optimize.linprog(np.array([-1]), A_ub=a.reshape((4, 1)), b_ub=b, bounds=(0, 1))
+			AA = np.concatenate((X, pt2_1[[i]]), axis=0).T
+			BB = pt2[i]
+			c = np.array([0, 0, 0, 0, 1])
+			res1 = optimize.linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=AA, b_eq=BB, bounds=(0, None))
+			res2 = optimize.linprog(-c, A_ub=A_ub, b_ub=b_ub, A_eq=AA, b_eq=BB, bounds=(0, None))
 			
-			lamb[i] = [res1.fun, -res2.fun]
+			valid[i] = 0 if res1.success == False or res2.success == False else 1
+			lamb[i, 0] = res1.fun if res1.success == True else -1
+			lamb[i, 1] = res2.fun if res2.success == True else -1
 		
 		def valid_new_points(pt1, pt2, lmd):
 			'''
@@ -517,8 +539,6 @@ class court_model(object):
 			:params: lmd: (n,) matrix
 			:return: newpt: (n, 3) matrix.	newpt = lmd * pt1 + (1 - lmd) * pt2
 			'''
-			if lmd is None:
-				return None
 			lmd = lmd.reshape((lmd.size, 1))
 			l1 = np.concatenate((lmd, lmd, lmd), axis=1)
 			l2 = 1 - l1
@@ -531,7 +551,7 @@ class court_model(object):
 			return dst
 		
 		# remove invalid lines
-		valid_idx = np.argwhere((lamb[:, 0] <= lamb[:, 1]) & (lamb[:, 0] > 0))[:, 0]
+		valid_idx = np.argwhere(valid == 1)[:, 0]
 		lamb = lamb[valid_idx]
 		pt1 = pt1[valid_idx]
 		pt2 = pt2[valid_idx]
@@ -616,7 +636,7 @@ class court_model(object):
 				ml = maplines[i, [2, 3, 0, 1]] if maplines[i, 0] > maplines[i, 2] else maplines[i]
 
 				# mapline的左右端点必须在imgline的外侧
-				if ml[2] < il[2] or ml[0] > il[0]:
+				if ml[2] < il[2] + 50 or ml[0] > il[0] - 50:
 					continue
 				map_count[j] = 1
 
@@ -666,8 +686,10 @@ class court_model(object):
 				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
 				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
 				  
-				if '[[0_4]_ [0_5]_ [2_4]_ [2_5]]_3' in idxstr and sv == 3 and sh == 1:
-					print(sstr)
+				# if '[[0_4]_ [0_5]_ [2_4]_ [2_5]]_3' in idxstr and sh == 1 and sv == 3:
+				# 	print(sstr)
+				# else:
+				# 	continue
 
 				# 3. calculate homography matrix H
 				M = cv2.getPerspectiveTransform(np.float32(st_points), np.float32(ig_points))
@@ -697,8 +719,8 @@ class court_model(object):
 				mapping_lines = mapping_lines.astype(int)
 				iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
 				color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 15
-				# color[4] = 6
-				# color[5] = 6
+				iname1 = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '_all.png'
+				
 				self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
 
 				# 5. calculate accuracy score of p, and get the most suitable one.
@@ -745,7 +767,7 @@ class court_model(object):
 				continue
 			points = hull.reshape((4, -1))
 			
-			# TODO: 检查四个点构成的凸包是否四个边对应四条检测的线，如果不是，则跳过
+			# 检查四个点构成的凸包是否四个边对应四条检测的线，如果不是，则跳过
 			# eg. 1 3对边，2 points = [[1, 3], [2, 4], [3, 4], [1, 2]]
 			intersect = self.image['intersections']
 			hidx = np.where((intersect[:, :, 0].ravel()==points[:, 0][:, None]) & (intersect[:, :, 1].ravel()==points[:, 1][:, None]))[-1].reshape(-1, 1)
@@ -769,7 +791,7 @@ class court_model(object):
 			# TODO: 选取最佳模型策略
 		for i in range(Ms.shape[0]):
 			maplines = self.calculate_mapping_lines(Ms[i])
-			testimg = cv2.imread('mediating/pureline.png')
+			testimg = cv2.imread('mediating/24_pureline.png')
 			maplines = maplines.astype(int)
 			iname = 'mediating/' + str(i) + '.png'
 			color = np.ones((maplines.shape[0]), dtype='uint8') * 15
