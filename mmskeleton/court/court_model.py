@@ -1,41 +1,13 @@
+from os import sep
 from typing import Counter
 import cv2
+from matplotlib.pyplot import axis, sca
 import numpy as np
 from scipy import optimize
 from sympy.utilities.iterables import multiset_permutations, subsets, variations
-
+from mmskeleton.court.util import UnionFind, distance_point_line, get_y
 INT_MAX = 2 ** 31
 Epsilon = 1e-7
-class UnionFind(object):
-	def __init__(self, n):
-		self.uf = [i for i in range(n + 1)]
-		self.sets_count = n
-
-	def find(self, p):
-		r = self.uf[p]
-		if p != r:
-			r = self.find(r)
-		self.uf[p] = r
-		return r
-
-	def union(self, p, q):
-		"""连通p,q 让q指向p"""
-		proot = self.find(p)
-		qroot = self.find(q)
-		if proot == qroot:
-			return
-		elif self.uf[proot] > self.uf[qroot]:  # 负数比较, 左边规模更小
-			# self.uf[qroot] += self.uf[proot]
-			self.uf[proot] = qroot
-		else:
-			# self.uf[proot] += self.uf[qroot]    # 规模相加
-			self.uf[qroot] = proot
-		self.sets_count -= 1  # 连通后集合总数减一
-
-	def is_connected(self, p, q):
-		"""判断pq是否已经连通"""
-		return self.find(p) == self.find(q)  # 即判断两个结点是否是属于同一个祖先
-
 
 class court_model(object):
 	def __init__(self, img):
@@ -246,10 +218,10 @@ class court_model(object):
 			normal1 = self.calculate_normal(line1)
 		if normal2 is None:
 			normal2 = self.calculate_normal(line2)
-		d11 = self.distance_point_line(line1[:2], line2)
-		d12 = self.distance_point_line(line1[2:], line2)
-		d21 = self.distance_point_line(line2[:2], line1)
-		d22 = self.distance_point_line(line2[2:], line1)
+		d11 = distance_point_line(line1[:2], line2)
+		d12 = distance_point_line(line1[2:], line2)
+		d21 = distance_point_line(line2[:2], line1)
+		d22 = distance_point_line(line2[2:], line1)
 		cosAngle = normal1[0] * normal2[0] + normal1[1] * normal2[1]
 		return cosAngle > athres and ((d11 < dthres and d12 < dthres) or (d21 < dthres and d22 < dthres))
 
@@ -257,6 +229,7 @@ class court_model(object):
 		"""
 		normal: n * 5, a normal = (n1, n2, d, k, b)
 		"""
+		# TODO: 计算法线的方法有问题，正负号
 		need_flatten = False
 		if lines.shape[0] == lines.size:
 			need_flatten = True
@@ -281,18 +254,7 @@ class court_model(object):
 			normal = normal.flatten()
 		return normal
 
-	def calculate_y_line(self, line, x):
-		x_type = type(x)
-		x1, y1, x2, y2 = line[:4]
-		A = y1 - y2
-		B = x2 - x1
-		C = x1 * y2 - x2 * y1
-		avgy = (y1 + y2) / 2
-		if B == 0:
-			if x_type == np.ndarray:
-				return np.ones((x.shape)) * avgy
-			return avgy
-		return -(A * x + C) / B
+	
 
 	def merge_same_lines(self, lines, normals, ufsidx):
 		pureidx = np.unique(ufsidx)
@@ -306,7 +268,7 @@ class court_model(object):
 			# new line: y = avgk * x + avgb
 			avgk = tmpn[:, 3].mean()
 			avgx = tmpl[:, (0, 2)].mean()
-			y = np.array([self.calculate_y_line(ll, avgx) for ll in tmpl])
+			y = np.array([get_y(ll, avgx) for ll in tmpl])
 			avgy = y.mean()
 			avgb = avgy - avgk * avgx
 
@@ -491,14 +453,6 @@ class court_model(object):
 			point1 = np.concatenate((src, np.ones((n, 1))), axis=1).T
 			point1 = point1.astype(np.float32)
 			dst = np.matmul(M, point1).T
-
-			# garentee z >= 1, ignore z  when |z| <= Epsilon
-			z_min = np.min(np.abs(dst), axis=1)[2]
-			if z_min >= -Epsilon and z_min <= Epsilon:
-				dst = dst * np.reciprocal(Epsilon)
-			elif z_min < 1:
-				dst = dst * np.reciprocal(z_min)
-			
 			return dst
 		
 		sl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0) # n * 4
@@ -506,10 +460,30 @@ class court_model(object):
 		
 		pt1 = get_3d_points(sl[:, :2], M)
 		pt2 = get_3d_points(sl[:, 2:], M)
+
+		def scale_factor(pt1, pt2):
+			'''
+			为投影的点(x, y, z)添加尺度因子。因为要做减法运算，在同一个投影矩阵下，要保证pt1 pt2使用的尺度因子相同。
+			after multipy _sf_, we get min(pt1.z) >= 1 and min(pt2.z) >= 1.
+			:params: pt1 pt2: (n, 3) matrix. point = (x, y, z)
+			:return: dst1 dst2: (n, 3) matrix.
+			'''
+			z_min1 = np.min(np.abs(pt1), axis=0)[-1]
+			z_min2 = np.min(np.abs(pt2), axis=0)[-1]
+			z_min = np.min([z_min1, z_min2])
+			
+			_sf_ = np.reciprocal(Epsilon)
+			if z_min >= Epsilon and z_min < 1:
+				_sf_ = np.reciprocal(z_min)
+			return pt1 * _sf_, pt2 * _sf_
+		
+		pt1, pt2 = scale_factor(pt1, pt2)
 		pt2_1 = pt2 - pt1
 
 		# constrain
 		# variable: a1, a2, a3, a4, lmd
+		# const: u1 = (0, 0, 1); u2 = (h, 0, 1); u3 = (0, w, 1); u4 = (h, w, 1); p1 = (x1, y1, z1); p2 = (x2, y2, z2)
+		# target: ? <= lmd <= ?
 		# for each p1, p2:
 		# a1 * u1 + a2 * u2 + a3 * u3 + a4 * u4 = lmd * p1 + (1 - lmd) * p2
 		# a1 + a2 + a3 + a4 >= 1
@@ -530,8 +504,8 @@ class court_model(object):
 			
 			valid[i] = 0 if res1.success == False or res2.success == False else 1
 			lamb[i, 0] = res1.fun if res1.success == True else -1
-			lamb[i, 1] = res2.fun if res2.success == True else -1
-		
+			lamb[i, 1] = -res2.fun if res2.success == True else -1
+		# print("- - - - - - - - - - -", lamb, sep='\n')
 		def valid_new_points(pt1, pt2, lmd):
 			'''
 			:params: pt1: (n, 3) matrix
@@ -561,22 +535,6 @@ class court_model(object):
 
 		return np.concatenate((newpt1, newpt2), axis=1)
 
-
-	def distance_point_line(self, point, line):
-		'''
-		calculate the distance from a point 'point' to a line 'line'.
-		:params: point: (x0, y0)
-		:params: line: (x1, y1, x2, y2)
-		:return: distance
-		'''
-		x0, y0 = point[0], point[1]
-		x1, y1, x2, y2 = line[0], line[1], line[2], line[3]
-		A = y1 - y2
-		B = x2 - x1
-		C = x1 * y2 - y1 * x2
-		mole = np.abs(A * x0 + B * y0 + C)
-		deno = (A ** 2 + B ** 2) ** .5
-		return mole / deno
 
 	def line_length(self, lines):
 		"""
@@ -642,10 +600,10 @@ class court_model(object):
 
 				# TODO: 修改score计算方式，不全部利用mapline的点，而只使用il对应的点
 				ipxx = np.arange(il[0], il[2]+1, 1)
-				ipxy = self.calculate_y_line(il, ipxx)
+				ipxy = get_y(il, ipxx)
 
-				mpxx = self.calculate_y_line(np.array([il[0], ml[0], il[2], ml[2]]), ipxx)
-				mpxy = self.calculate_y_line(ml, mpxx)
+				mpxx = get_y(np.array([il[0], ml[0], il[2], ml[2]]), ipxx)
+				mpxy = get_y(ml, mpxx)
 
 				match_points = np.vstack((ipxx, ipxy, mpxx, mpxy)).T
 				length = self.line_length(match_points)
@@ -686,10 +644,10 @@ class court_model(object):
 				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
 				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
 				  
-				# if '[[0_4]_ [0_5]_ [2_4]_ [2_5]]_3' in idxstr and sh == 1 and sv == 3:
-				# 	print(sstr)
-				# else:
-				# 	continue
+				if '[[0_4]_ [0_5]_ [2_4]_ [2_5]]_3' in idxstr and sh == 1 and sv == 3:
+					print(idxstr)
+				else:
+					continue
 
 				# 3. calculate homography matrix H
 				M = cv2.getPerspectiveTransform(np.float32(st_points), np.float32(ig_points))
@@ -719,7 +677,6 @@ class court_model(object):
 				mapping_lines = mapping_lines.astype(int)
 				iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
 				color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 15
-				iname1 = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '_all.png'
 				
 				self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
 
