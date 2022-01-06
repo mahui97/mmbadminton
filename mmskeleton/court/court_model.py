@@ -222,7 +222,7 @@ class court_model(object):
 		d12 = distance_point_line(line1[2:], line2)
 		d21 = distance_point_line(line2[:2], line1)
 		d22 = distance_point_line(line2[2:], line1)
-		cosAngle = normal1[0] * normal2[0] + normal1[1] * normal2[1]
+		cosAngle = np.abs(normal1[0] * normal2[0] + normal1[1] * normal2[1])
 		return cosAngle > athres and ((d11 < dthres and d12 < dthres) or (d21 < dthres and d22 < dthres))
 
 	def calculate_normal(self, lines):
@@ -405,8 +405,6 @@ class court_model(object):
 				if ptx != -1 and pty != -1:
 					tmp.append([i, j, ptx, pty])
 		points = np.array(tmp, dtype=np.int32)
-		# if points.shape[0] > 2:
-		#     points = points[np.lexsort([points[:, 1], points[:, 0]]), :]
 		return points
 
 
@@ -460,24 +458,6 @@ class court_model(object):
 		
 		pt1 = get_3d_points(sl[:, :2], M)
 		pt2 = get_3d_points(sl[:, 2:], M)
-
-		def scale_factor(pt1, pt2):
-			'''
-			为投影的点(x, y, z)添加尺度因子。因为要做减法运算，在同一个投影矩阵下，要保证pt1 pt2使用的尺度因子相同。
-			after multipy _sf_, we get min(pt1.z) >= 1 and min(pt2.z) >= 1.
-			:params: pt1 pt2: (n, 3) matrix. point = (x, y, z)
-			:return: dst1 dst2: (n, 3) matrix.
-			'''
-			z_min1 = np.min(np.abs(pt1), axis=0)[-1]
-			z_min2 = np.min(np.abs(pt2), axis=0)[-1]
-			z_min = np.min([z_min1, z_min2])
-			
-			_sf_ = np.reciprocal(Epsilon)
-			if z_min >= Epsilon and z_min < 1:
-				_sf_ = np.reciprocal(z_min)
-			return pt1 * _sf_, pt2 * _sf_
-		
-		pt1, pt2 = scale_factor(pt1, pt2)
 		pt2_1 = pt2 - pt1
 
 		# constrain
@@ -486,13 +466,12 @@ class court_model(object):
 		# target: ? <= lmd <= ?
 		# for each p1, p2:
 		# a1 * u1 + a2 * u2 + a3 * u3 + a4 * u4 = lmd * p1 + (1 - lmd) * p2
-		# a1 + a2 + a3 + a4 >= 1
 		# lmd <= 1
 		# a1, a2, a3, a4, lmd >= 0
 		w, h = self.imgshape[:2]
 		X = np.array([[0, 0, 1], [h, 0, 1], [0, w, 1], [h, w, 1]], dtype=np.float32)
-		A_ub = np.array([[0, 0, 0, 0, 1], [-1, -1, -1, -1, 0]])
-		b_ub = np.array([1, -1])
+		A_ub = np.array([[0, 0, 0, 0, 1]])
+		b_ub = np.array([1])
 		lamb = np.zeros((n, 2))
 		valid = np.ones((n), dtype=np.int8)
 		for i in range(n):
@@ -505,7 +484,6 @@ class court_model(object):
 			valid[i] = 0 if res1.success == False or res2.success == False else 1
 			lamb[i, 0] = res1.fun if res1.success == True else -1
 			lamb[i, 1] = -res2.fun if res2.success == True else -1
-		# print("- - - - - - - - - - -", lamb, sep='\n')
 		def valid_new_points(pt1, pt2, lmd):
 			'''
 			:params: pt1: (n, 3) matrix
@@ -577,7 +555,7 @@ class court_model(object):
 		inormals = self.image['normals']
 		mnormals = self.calculate_normal(maplines)
 		score = 0
-		map_count = np.zeros((imglines.shape[0]+1), dtype='int8') # 有多少条线匹配
+		map_count = np.zeros((imglines.shape[0]), dtype='int8') # 有多少条线匹配
 		angleThres = np.cos(np.pi / 120)
 		dThres = 14
 		for i in range(maplines.shape[0]):
@@ -594,7 +572,7 @@ class court_model(object):
 				ml = maplines[i, [2, 3, 0, 1]] if maplines[i, 0] > maplines[i, 2] else maplines[i]
 
 				# mapline的左右端点必须在imgline的外侧
-				if ml[2] < il[2] + 50 or ml[0] > il[0] - 50:
+				if ml[2] < il[2] - 50 or ml[0] > il[0] + 50:
 					continue
 				map_count[j] = 1
 
@@ -644,10 +622,10 @@ class court_model(object):
 				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
 				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
 				  
-				if '[[0_4]_ [0_5]_ [2_4]_ [2_5]]_3' in idxstr and sh == 1 and sv == 3:
-					print(idxstr)
-				else:
-					continue
+				# if '[[0_4]_ [0_5]_ [2_4]_ [2_5]]_3' in idxstr:
+				# 	print(idxstr)
+				# else:
+				# 	continue
 
 				# 3. calculate homography matrix H
 				M = cv2.getPerspectiveTransform(np.float32(st_points), np.float32(ig_points))
