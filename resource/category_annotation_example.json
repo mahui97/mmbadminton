@@ -73,6 +73,12 @@
         },
         "zgy": {
             "category_id": 43
+        },
+        "testcourt": {
+            "category_id": 100
+        },
+        "output": {
+            "category_id": 100
         }
     }
 }

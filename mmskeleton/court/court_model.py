@@ -14,19 +14,33 @@ class court_model(object):
 		super().__init__()
 		self.standard = dict()
 		# 垂直线
-		self.standard['vlines'] = np.array([[14, 29, 14, 450],
-						   [29, 29, 29, 450],
-						   [110, 29, 110, 177],
-						   [191, 29, 191, 450],
-						   [205, 29, 205, 450],
-						   [110, 303, 110, 450]])
+		self.standard['vlines'] = np.array([[12, 12, 12, 680],
+						   [35, 12, 35, 680],
+						   [163.5, 12, 163.5, 246],
+						   [292, 12, 292, 680],
+						   [315, 12, 315, 680],
+						   [163.5, 446, 163.5, 680]])
 		# 水平线
-		self.standard['hlines'] = np.array([[14, 29, 205, 29],
-						   [14, 53, 205, 53],
-						   [14, 177, 205, 177],
-						   [14, 303, 205, 303],
-						   [14, 426, 205, 426],
-						   [14, 450, 205, 450]])
+		self.standard['hlines'] = np.array([[12, 12, 315, 12],
+						   [12, 50, 315, 50],
+						   [12, 246, 315, 246],
+						   [12, 446, 315, 446],
+						   [12, 642, 315, 642],
+						   [12, 680, 315, 680]])
+		# # 垂直线
+		# self.standard['vlines'] = np.array([[14, 29, 14, 450],
+		# 				   [29, 29, 29, 450],
+		# 				   [110, 29, 110, 177],
+		# 				   [191, 29, 191, 450],
+		# 				   [205, 29, 205, 450],
+		# 				   [110, 303, 110, 450]])
+		# # 水平线
+		# self.standard['hlines'] = np.array([[14, 29, 205, 29],
+		# 				   [14, 53, 205, 53],
+		# 				   [14, 177, 205, 177],
+		# 				   [14, 303, 205, 303],
+		# 				   [14, 426, 205, 426],
+		# 				   [14, 450, 205, 450]])
 		self.standard['indexes'] = np.arange(12)
 		self.calculate_intersections_as_matrix()
 
@@ -35,7 +49,7 @@ class court_model(object):
 		self.image = dict()
 		i = 0
 		while i < 4 and (self.image.get('lines') is None or self.image.get('lines').shape[0] < 5):
-			candidate, contours = self.white_pixel_extract(img, threshold=5+5*i)
+			candidate, contours = self.white_pixel_extract(img, threshold=10+5*i)
 			self.line_detection(candidate, contours, img)
 			i += 1
 		if self.image['lines'].shape[0] < 5:
@@ -57,7 +71,7 @@ class court_model(object):
 			hlines = self.standard['hlines']
 			vlines = self.standard['vlines']
 		
-			points = np.ones(hlines.shape[0] * vlines.shape[0] * 2, dtype='int').reshape((hlines.shape[0], vlines.shape[0], 2))
+			points = np.ones(hlines.shape[0] * vlines.shape[0] * 2).reshape((hlines.shape[0], vlines.shape[0], 2))
 			points = -1 * points
 			for i, l1 in enumerate(hlines):
 				for j, l2 in enumerate(vlines):
@@ -67,7 +81,7 @@ class court_model(object):
 		
 		# calculate image intersections matrix
 		n = lines.shape[0]
-		points = np.ones(n * n * 2, dtype='int').reshape((n, n, 2)) * (-1)
+		points = np.ones(n * n * 2, dtype=np.float32).reshape((n, n, 2)) * (-1)
 		for i, l1 in enumerate(lines):
 			for j, l2 in enumerate(lines):
 				if i >= j:
@@ -76,6 +90,7 @@ class court_model(object):
 		
 		self.image['lines'] = lines
 		self.image['intersections'] = points
+		# print('*******************', self.image['intersections'], sep='\n')
 
 		return
 
@@ -158,7 +173,7 @@ class court_model(object):
 		cv2.imwrite("mediating/5_poly.png", poly)
 		# # 绘制轮廓
 		cnt_fill = np.zeros((h, w),dtype=np.uint8)
-		cnt_fill = cv2.drawContours(cnt_fill,contours,-1,255,cv2.FILLED)
+		cnt_fill = cv2.drawContours(cnt_fill,hulls,-1,255,cv2.FILLED)
 		# cnt_fill = cv2.drawContours(cnt_fill, contours, -1, 255, 3)
 		cv2.imwrite("mediating/6_cnt_fill.png", cnt_fill)
 		result = cv2.bitwise_and(blured, cnt_fill)
@@ -190,13 +205,14 @@ class court_model(object):
 					(0, 197, 205), (105, 139, 34), (139, 134, 78), (255, 193, 37), (205, 92, 92),
 					(237, 0, 140), (178, 34, 34), (255, 20, 147), (139, 69, 19), (148, 0, 211), (139, 137, 137)])
 		n = lines.shape[0]
+		lines = lines.astype(np.int)
 		if n == 0:
 			return
 		if coloridx is None:
 			coloridx = np.arange(n)
 		for i, line in enumerate(lines):
 			cidx = coloridx[i]
-			x1, y1, x2, y2 = line[0], line[1], line[2], line[3]
+			x1, y1, x2, y2 = line[:4]
 			r, b, g = int(colors[cidx % 20, 0]), int(colors[cidx % 20, 1]), int(colors[cidx % 20, 2])
 			cv2.line(img, (x1, y1), (x2, y2), (r, b, g), thickness=thickness)
 		cv2.imwrite(imgName, img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
@@ -565,7 +581,7 @@ class court_model(object):
 				if flag == False:
 					continue
 				# mapline的长度必须比imgline长
-				if self.line_length(maplines[i]) < self.line_length(imglines[j]):
+				if self.line_length(maplines[i]) < self.line_length(imglines[j]) - 100:
 					continue
 				
 				il = imglines[j, [2, 3, 0, 1]] if imglines[j, 0] > imglines[j, 2] else imglines[j]
@@ -622,7 +638,7 @@ class court_model(object):
 				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
 				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
 				  
-				# if '[[0_4]_ [0_5]_ [2_4]_ [2_5]]_3' in idxstr:
+				# if '[[0_2]_ [0_8]_ [2_7]_ [2_8]]' in idxstr:
 				# 	print(idxstr)
 				# else:
 				# 	continue
@@ -637,13 +653,15 @@ class court_model(object):
 				mapping_lines = self.calculate_mapping_lines(M)
 				
 				testimg = cv2.imread('mediating/24_pureline.png')
+				pp = st_points.astype(np.int)
 				i = 3
 				for j in range(4):
-					cv2.circle(testimg, st_points[j], i, (0, 0, 255), thickness=-1)
+					cv2.circle(testimg, pp[j], i, (0, 0, 255), thickness=-1)
 					i += 2
+				pp = ig_points.astype(np.int)
 				i = 3
 				for j in range(4):
-					cv2.circle(testimg, ig_points[j], i, (0, 255, 0), thickness=-1)
+					cv2.circle(testimg, pp[j], i, (0, 255, 0), thickness=-1)
 					i += 2
 				tmp = st_points.reshape((1, 4, 2)).astype(np.float32)
 				mp_points = cv2.perspectiveTransform(tmp, M)
@@ -654,7 +672,7 @@ class court_model(object):
 					i += 3
 				mapping_lines = mapping_lines.astype(int)
 				iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
-				color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 15
+				color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 6
 				
 				self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
 

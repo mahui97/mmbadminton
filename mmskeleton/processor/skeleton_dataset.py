@@ -81,7 +81,7 @@ def build(detection_cfg,
     prog_bar = ProgressBar(len(video_file_list))
     for video_file in video_file_list:
         video_name = video_file.split('/')[-1].split('.')[0]
-        if video_name != 'ff_a_01':
+        if video_name != 'output':
             continue
         action = video_name.split('_')[0]
         category_id = video_categories[action][
