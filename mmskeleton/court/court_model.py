@@ -1,10 +1,9 @@
 from os import sep
 from typing import Counter
 import cv2
-from matplotlib.pyplot import axis, sca
 import numpy as np
 from scipy import optimize
-from sympy.utilities.iterables import multiset_permutations, subsets, variations
+from sympy.utilities.iterables import subsets
 from mmskeleton.court.util import UnionFind, distance_point_line, get_y
 INT_MAX = 2 ** 31
 Epsilon = 1e-7
