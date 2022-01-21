@@ -34,7 +34,7 @@ processor_cfg:
     - type: "datasets.DataPipeline"
       data_source:
         type: "datasets.SkeletonLoader"
-        data_dir: ./data/dataset_example
+        data_dir: ./data/badminton
         num_track: 2
         num_keypoints: 17
         repeat: 20
@@ -62,7 +62,7 @@ processor_cfg:
         - {type: "datasets.skeleton.to_tuple"}
 
   # dataloader setting
-  batch_size: 3
+  batch_size: 8
   gpus: 1
 
   # optimizer setting
@@ -75,7 +75,7 @@ processor_cfg:
 
   # runtime setting
   workflow: [['train', 5], ['val', 1]]
-  work_dir: ./work_dir/recognition/st_gcn/dataset_example
+  work_dir: ./work_dir/recognition/st_gcn/badminton
   total_epochs: 65
   training_hooks:
     lr_config:

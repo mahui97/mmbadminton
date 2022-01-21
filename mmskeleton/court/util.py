@@ -1,0 +1,65 @@
+import numpy as np
+
+class UnionFind(object):
+	def __init__(self, n):
+		self.uf = [i for i in range(n + 1)]
+		self.sets_count = n
+
+	def find(self, p):
+		r = self.uf[p]
+		if p != r:
+			r = self.find(r)
+		self.uf[p] = r
+		return r
+
+	def union(self, p, q):
+		"""连通p,q 让q指向p"""
+		proot = self.find(p)
+		qroot = self.find(q)
+		if proot == qroot:
+			return
+		elif self.uf[proot] > self.uf[qroot]:  # 负数比较, 左边规模更小
+			# self.uf[qroot] += self.uf[proot]
+			self.uf[proot] = qroot
+		else:
+			# self.uf[proot] += self.uf[qroot]    # 规模相加
+			self.uf[qroot] = proot
+		self.sets_count -= 1  # 连通后集合总数减一
+
+	def is_connected(self, p, q):
+		"""判断pq是否已经连通"""
+		return self.find(p) == self.find(q)  # 即判断两个结点是否是属于同一个祖先
+
+def distance_point_line(point, line):
+    '''
+    calculate the distance from a point 'point' to a line 'line'.
+    :params: point: (x0, y0)
+    :params: line: (x1, y1, x2, y2)
+    :return: distance
+    '''
+    x0, y0 = point[0], point[1]
+    x1, y1, x2, y2 = line[0], line[1], line[2], line[3]
+    A = y1 - y2
+    B = x2 - x1
+    C = x1 * y2 - y1 * x2
+    mole = np.abs(A * x0 + B * y0 + C)
+    deno = (A ** 2 + B ** 2) ** .5
+    return mole / deno
+
+def get_y(line, x):
+    '''
+    :params: line: (x1, y1, x2, y2)
+    :params: x: np.float32
+    :return: y: (x, y) in line === (y1 - y2) / (x1 - x2) = (y - y1) / (x - x1)
+    '''
+    x_type = type(x)
+    x1, y1, x2, y2 = line[:4]
+    A = y1 - y2
+    B = x2 - x1
+    C = x1 * y2 - x2 * y1
+    avgy = (y1 + y2) / 2
+    if B == 0:
+        if x_type == np.ndarray:
+            return np.ones((x.shape)) * avgy
+        return avgy
+    return -(A * x + C) / B

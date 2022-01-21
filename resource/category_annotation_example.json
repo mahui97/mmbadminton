@@ -3,20 +3,82 @@
         "skateboarding",
         "clean_and_jerk",
         "ta_chi",
-        "ff_a_01"
+        "ff_a_01",
+        "ff_e_01",
+        "ff_d_01"
     ],
     "annotations": {
-        "clean": {
+        "ff": {
             "category_id": 1
         },
-        "skateboarding": {
-            "category_id": 0
-        },
-        "ta": {
+        "jf": {
             "category_id": 2
         },
-        "ff": {
+        "zwqx": {
             "category_id": 3
+        },
+        "fwqx": {
+            "category_id": 4
+        },
+        "ft": {
+            "category_id": 5
+        },
+        "zg": {
+            "category_id": 6
+        },
+        "fg": {
+            "category_id": 7
+        },
+        "ztt": {
+            "category_id": 8
+        },
+        "ftt": {
+            "category_id": 9
+        },
+        "wqfw": {
+            "category_id": 10
+        },
+        "zc": {
+            "category_id": 21
+        },
+        "fc": {
+            "category_id": 22
+        },
+        "zpg": {
+            "category_id": 31
+        },
+        "fpg": {
+            "category_id": 32
+        },
+        "fps": {
+            "category_id": 33
+        },
+        "zjgy": {
+            "category_id": 34
+        },
+        "zsz": {
+            "category_id": 35
+        },
+        "zd": {
+            "category_id": 36
+        },
+        "fd": {
+            "category_id": 37
+        },
+        "hclcs": {
+            "category_id": 41
+        },
+        "hclcd": {
+            "category_id": 42
+        },
+        "zgy": {
+            "category_id": 43
+        },
+        "testcourt": {
+            "category_id": 100
+        },
+        "output": {
+            "category_id": 100
         }
     }
 }

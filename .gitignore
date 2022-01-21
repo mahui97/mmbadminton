@@ -115,5 +115,9 @@ ENV/
 
 # custom
 mmskeleton/version.py
-data
 .vscode
+
+# mediating image
+mediating/
+mapimage/
+pointimage/

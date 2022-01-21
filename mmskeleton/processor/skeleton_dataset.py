@@ -8,7 +8,7 @@ from mmskeleton.utils import call_obj
 from mmskeleton.datasets import skeleton
 from multiprocessing import current_process, Process, Manager
 from mmskeleton.utils import cache_checkpoint
-from mmskeleton.court import init_court_model, is_in_court
+from mmskeleton.court import court_model
 from mmcv.utils import ProgressBar
 
 pose_estimators = dict()
@@ -31,6 +31,15 @@ def worker(inputs, results, gpu, detection_cfg, estimation_cfg):
         res['frame_index'] = idx
         results.put(res)
 
+def get_all_files(path):
+    allfile = []
+    for dirpath, dirnames, filenames in os.walk(path):
+        for dir in dirnames:
+            allfile.append(os.path.join(dirpath, dir))
+        for name in filenames:
+            allfile.append(os.path.join(dirpath, name))
+    allfile = list(filter(lambda x: x.find(".mp4") >= 0, allfile))
+    return allfile
 
 def build(detection_cfg,
           estimation_cfg,
@@ -68,16 +77,25 @@ def build(detection_cfg,
         procs.append(p)
         p.start()
 
-    video_file_list = os.listdir(video_dir)
+    video_file_list = get_all_files(video_dir)
     prog_bar = ProgressBar(len(video_file_list))
     for video_file in video_file_list:
-
-        reader = mmcv.VideoReader(os.path.join(video_dir, video_file))
+        video_name = video_file.split('/')[-1].split('.')[0]
+        if video_name != 'output':
+            continue
+        action = video_name.split('_')[0]
+        category_id = video_categories[action][
+            'category_id'] if action in video_categories else -1
+        if category_id == -1:
+            continue
+        # reader = mmcv.VideoReader(os.path.join(video_dir, video_file))
+        reader = mmcv.VideoReader(video_file)
+        
         video_frames = reader[:video_max_length]
         annotations = []
         num_keypoints = -1
 
-        court_model_M = init_court_model(video_frames[0])
+        frame_court_model = court_model(video_frames[0])
         for i, image in enumerate(video_frames):
             inputs.put((i, image))
 
@@ -95,7 +113,7 @@ def build(detection_cfg,
             bbox_size = 2147483648
             last_person_id = -1
             for j in range(num_person):
-                in_court[j] = 1 if is_in_court(t['joint_preds'][j][15:17, :], court_model_M) == True else 0
+                in_court[j] = 1 if frame_court_model.in_court(t['joint_preds'][j][15:17, :]) == True else 0
                 if in_court[j] == 1:
                     bspace = (t['person_bbox'][j][2] - t['person_bbox'][j][0]) * (t['person_bbox'][j][3] - t['person_bbox'][j][1])
                     if bbox_size <= bspace:
@@ -125,11 +143,8 @@ def build(detection_cfg,
 
         # output results
         annotations = sorted(annotations, key=lambda x: x['frame_index'])
-        action = video_file.split('.')[0].split('_')[0]
-        category_id = video_categories[action][
-            'category_id'] if action in video_categories else -1
         info = dict(
-            video_name=video_file,
+            video_name=video_name,
             resolution=reader.resolution,
             num_frame=len(video_frames),
             num_keypoints=num_keypoints,
@@ -137,7 +152,7 @@ def build(detection_cfg,
             version='1.0')
         video_info = dict(
             info=info, category_id=category_id, annotations=annotations)
-        with open(os.path.join(out_dir, video_file + '.json'), 'w') as f:
+        with open(os.path.join(out_dir, video_name + '.json'), 'w') as f:
             json.dump(video_info, f)
 
         prog_bar.update()

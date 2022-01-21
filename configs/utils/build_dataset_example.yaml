@@ -2,8 +2,8 @@ processor_cfg:
   type: "processor.skeleton_dataset.build"
   gpus: 1
   worker_per_gpu: 2
-  video_dir: resource/data_example
-  out_dir: "data/dataset_example"
+  video_dir: resource/data
+  out_dir: "data/badminton"
   category_annotation: resource/category_annotation_example.json
   detection_cfg:
     model_cfg: configs/mmdet/cascade_rcnn_r50_fpn_1x.py
