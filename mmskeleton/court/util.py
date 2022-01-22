@@ -30,20 +30,26 @@ class UnionFind(object):
 		"""判断pq是否已经连通"""
 		return self.find(p) == self.find(q)  # 即判断两个结点是否是属于同一个祖先
 
-def distance_point_line(point, line):
+def distance_point_line(points, line):
     '''
-    calculate the distance from a point 'point' to a line 'line'.
-    :params: point: (x0, y0)
+    calculate the distance from points 'points' to a line 'line'.
+    :params: points: [(x0, y0)]
     :params: line: (x1, y1, x2, y2)
     :return: distance
     '''
-    x0, y0 = point[0], point[1]
     x1, y1, x2, y2 = line[0], line[1], line[2], line[3]
     A = y1 - y2
     B = x2 - x1
     C = x1 * y2 - y1 * x2
-    mole = np.abs(A * x0 + B * y0 + C)
     deno = (A ** 2 + B ** 2) ** .5
+    # multi points
+    if points.size > 2:
+        moles = np.abs(A * points[:, 0] + B * points[:, 1] + C)
+        return moles / deno
+    
+    # single point
+    x0, y0 = points[0], points[1]
+    mole = np.abs(A * x0 + B * y0 + C)
     return mole / deno
 
 def get_y(line, x):

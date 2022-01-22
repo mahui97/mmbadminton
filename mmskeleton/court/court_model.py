@@ -3,14 +3,16 @@ from typing import Counter
 import cv2
 import numpy as np
 from scipy import optimize
+from sklearn.feature_extraction import image
 from sympy.utilities.iterables import subsets
 from mmskeleton.court.util import UnionFind, distance_point_line, get_y
 INT_MAX = 2 ** 31
 Epsilon = 1e-7
 
 class court_model(object):
-	def __init__(self, img):
+	def __init__(self, img, name):
 		super().__init__()
+		self.name = name
 		self.standard = dict()
 		# 垂直线
 		self.standard['vlines'] = np.array([[12, 12, 12, 680],
@@ -51,8 +53,11 @@ class court_model(object):
 			candidate, contours = self.white_pixel_extract(img, threshold=10+5*i)
 			self.line_detection(candidate, contours, img)
 			i += 1
-		if self.image['lines'].shape[0] < 5:
-			print('Court Model Init Failed! Court lines not enough!')
+		if self.image.get('lines') is None or self.image['lines'].shape[0] < 5:
+			f = 'scores.txt'
+			with open(f, 'a') as file:
+				file.write(self.name + '\t' + str(self.image['lines'].shape[0]) + ' Court lines not enough!\n')
+			print(' ', self.name, 'Court Model Init Failed! Court lines not enough!')
 		else:
 			self.M, self.score = self.model_fitting()
 			pers = cv2.warpPerspective(img, self.M, (img.shape[1], img.shape[0]))
@@ -118,6 +123,7 @@ class court_model(object):
 
 
 	def white_pixel_extract(self, img, threshold=5):
+		cv2.imwrite("mediating/0_source.png", img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 		h, w = img.shape[:2]
 		# 1. 找到绿色区域
 		# convert to HSV image
@@ -166,7 +172,7 @@ class court_model(object):
 		valid_contours = np.argwhere(valid_contours > 300)[:, 0]
 		contours = np.array(contours)[valid_contours].tolist()
 		
-		hulls = [cv2.convexHull(cnt) for cnt in contours]
+		hulls = [cv2.convexHull(np.array(cnt)) for cnt in contours]
 		poly = img.copy()
 		cv2.polylines(poly, hulls, True, (0, 0, 255), 2)  # red
 		cv2.imwrite("mediating/5_poly.png", poly)
@@ -200,7 +206,7 @@ class court_model(object):
 
 	def draw_line(self, imgName, img, lines, coloridx=None, thickness=1):
 		colors = np.array([(25, 25, 112), (123, 104, 238), (0, 191, 255), (255, 218, 185), (47, 79, 79),
-					(255, 127, 0), (0, 255, 0), (139, 0, 0), (0, 205, 0), (67, 205, 128),
+					(255, 127, 0), (0, 255, 0), (139, 0, 0), (0, 205, 0), (67, 205, 128), (0, 0, 255),
 					(0, 197, 205), (105, 139, 34), (139, 134, 78), (255, 193, 37), (205, 92, 92),
 					(237, 0, 140), (178, 34, 34), (255, 20, 147), (139, 69, 19), (148, 0, 211), (139, 137, 137)])
 		n = lines.shape[0]
@@ -215,6 +221,7 @@ class court_model(object):
 			r, b, g = int(colors[cidx % 20, 0]), int(colors[cidx % 20, 1]), int(colors[cidx % 20, 2])
 			cv2.line(img, (x1, y1), (x2, y2), (r, b, g), thickness=thickness)
 		cv2.imwrite(imgName, img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		return img
 
 
 	def is_same_line(self, line1, line2, normal1=None, normal2=None, athres=0.99996, dthres=8):
@@ -332,8 +339,10 @@ class court_model(object):
 		
 		# remove duplicate lines, every color only need 1 line.
 		purelines, purenormals = self.merge_same_lines(lines, normal, ufsidx)
-		idx = np.lexsort(purenormals.T[:4, :])
-		return purelines[idx], purenormals[idx]
+		if purelines.shape[0] > 0:
+			idx = np.lexsort(purenormals.T[:4, :])
+			purelines, purenormals = purelines[idx], purenormals[idx]
+		return purelines, purenormals
 
 	
 	def line_detection(self, img, contours, source_image):
@@ -352,7 +361,7 @@ class court_model(object):
 			temp = cv2.subtract(mask, temp)
 			skel = cv2.bitwise_or(skel, temp)
 			mask = eroded.copy()
-		cv2.imwrite("mediating/20_skel.png", skel, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		# cv2.imwrite("mediating/20_skel.png", skel, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 		# # option: dilate + erode
 		# closed = cv2.morphologyEx(skel, cv2.MORPH_CLOSE, kernel)
@@ -361,11 +370,11 @@ class court_model(object):
 		# option: dilate
 		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 		dilt = cv2.dilate(skel, kernel, iterations=1)
-		cv2.imwrite("mediating/21_dilate.png", dilt, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		# cv2.imwrite("mediating/21_dilate.png", dilt, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
 		# hough line detection
 		edges = cv2.Canny(dilt, 32, 200, apertureSize=3)
-		cv2.imwrite("mediating/22_edges.png", edges, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		# cv2.imwrite("mediating/22_edges.png", edges, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 		lines = cv2.HoughLinesP(edges, 1, np.pi / 360, 15, minLineLength=200, maxLineGap=30)
 		if lines is None:
 			return
@@ -378,8 +387,10 @@ class court_model(object):
 		self.image['normals'] = purenormals
 		
 		result3 = source_image.copy()
-		pl = np.concatenate((purelines, self.standard['hlines'], self.standard['vlines']), axis=0)
-		self.draw_line("mediating/24_pureline.png", result3, pl)
+		# pl = np.concatenate((purelines, self.standard['hlines'], self.standard['vlines']), axis=0)
+		pl = purelines
+		cix = np.ones((pl.shape[0]), dtype=np.int8) * 10
+		self.draw_line("pureline/"+self.name+".png", result3, pl, coloridx=cix, thickness=3)
 		
 		self.calculate_intersections_as_matrix(purelines)
 
@@ -595,17 +606,17 @@ class court_model(object):
 				ipxx = np.arange(il[0], il[2]+1, 1)
 				ipxy = get_y(il, ipxx)
 
-				mpxx = get_y(np.array([il[0], ml[0], il[2], ml[2]]), ipxx)
-				mpxy = get_y(ml, mpxx)
+				dis = distance_point_line(np.vstack((ipxx, ipxy)).T, ml)
+				dis = np.where(dis < dThres, 1, 0)
 
-				match_points = np.vstack((ipxx, ipxy, mpxx, mpxy)).T
-				length = self.line_length(match_points)
-				score += np.sum(length)
+				# mpxx = get_y(np.array([il[0], ml[0], il[2], ml[2]]), ipxx)
+				# mpxy = get_y(ml, mpxx)
+
+				# match_points = np.vstack((ipxx, ipxy, mpxx, mpxy)).T
+				# length = self.line_length(match_points)
+				score += np.sum(dis)
 		mc = np.sum(map_count)
-		if mc == 0:
-			return score, mc
-		# score = 平均每条线的距离
-		return score / mc, mc
+		return score, mc
 
 
 	def line_grouping(self, intersections):
@@ -633,9 +644,9 @@ class court_model(object):
 			for sv in range(4):
 				st_points = self.get_points(np.array([sh, sh+1, sv, sv+1]), type='standard')
 
-				# store score to txt
-				sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
-				sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
+				# # store score to txt
+				# sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
+				# sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
 				  
 				# if '[[0_2]_ [0_8]_ [2_7]_ [2_8]]' in idxstr:
 				# 	print(idxstr)
@@ -651,41 +662,38 @@ class court_model(object):
 				# for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
 				mapping_lines = self.calculate_mapping_lines(M)
 				
-				testimg = cv2.imread('mediating/24_pureline.png')
-				pp = st_points.astype(np.int)
-				i = 3
-				for j in range(4):
-					cv2.circle(testimg, pp[j], i, (0, 0, 255), thickness=-1)
-					i += 2
-				pp = ig_points.astype(np.int)
-				i = 3
-				for j in range(4):
-					cv2.circle(testimg, pp[j], i, (0, 255, 0), thickness=-1)
-					i += 2
-				tmp = st_points.reshape((1, 4, 2)).astype(np.float32)
-				mp_points = cv2.perspectiveTransform(tmp, M)
-				mp_points = mp_points.reshape((4, 2)).astype(int)
-				i = 5
-				for j in range(4):
-					cv2.circle(testimg, mp_points[j], i, (255, 0, 0), thickness=2)
-					i += 3
-				mapping_lines = mapping_lines.astype(int)
-				iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
-				color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 6
+				# testimg = cv2.imread("pureline/"+self.name+".png")
+				# pp = st_points.astype(np.int)
+				# i = 3
+				# for j in range(4):
+				# 	cv2.circle(testimg, pp[j], i, (0, 0, 255), thickness=-1)
+				# 	i += 2
+				# pp = ig_points.astype(np.int)
+				# i = 3
+				# for j in range(4):
+				# 	cv2.circle(testimg, pp[j], i, (0, 255, 0), thickness=-1)
+				# 	i += 2
+				# tmp = st_points.reshape((1, 4, 2)).astype(np.float32)
+				# mp_points = cv2.perspectiveTransform(tmp, M)
+				# mp_points = mp_points.reshape((4, 2)).astype(int)
+				# i = 5
+				# for j in range(4):
+				# 	cv2.circle(testimg, mp_points[j], i, (255, 0, 0), thickness=2)
+				# 	i += 3
+				# mapping_lines = mapping_lines.astype(int)
+				# iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
+				# color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 6
 				
-				self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
+				# self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
 
 				# 5. calculate accuracy score of p, and get the most suitable one.
 				s, m_count = self.calculate_score(mapping_lines)
-				if s < scores[m_count]:
+				if s > scores[m_count]:
 					scores[m_count] = s
 					Ms[m_count] = M
 				
-				sstr = sstr + sigp + '\t' + sstp + '\t' + str(s) + '\n'
+				# sstr = sstr + sigp + '\t' + sstp + '\t' + str(s) + '\n'
 
-		f = 'mediating/ip_sp_score.txt'
-		with open(f, 'a') as file:
-			file.write(sstr)
 		return scores, Ms
 	
 	def model_fitting(self):
@@ -696,7 +704,7 @@ class court_model(object):
 		:return:
 		'''
 		n = self.image['lines'].shape[0]
-		scores = np.ones((n+1)) * INT_MAX
+		scores = np.zeros((n+1))
 		Ms = np.ones((n+1, 3, 3))
 		# get all possible line lists
 		# for each line list:
@@ -741,13 +749,22 @@ class court_model(object):
 				points = points[[1, 2, 3, 0]]
 			
 			# TODO: 选取最佳模型策略
+		sstr = ''
 		for i in range(Ms.shape[0]):
+			Mi = ''.join(np.array2string(Ms[i], separator=',').splitlines())
+			sstr = sstr + self.name + '\t' + str(i) + '\t' + str(scores[i]) + '\t' + Mi + '\n'
+			if scores[i] < 200:
+				continue
 			maplines = self.calculate_mapping_lines(Ms[i])
-			testimg = cv2.imread('mediating/24_pureline.png')
+			testimg = cv2.imread("pureline/"+self.name+".png")
 			maplines = maplines.astype(int)
-			iname = 'mediating/' + str(i) + '.png'
+			iname = 'best/' + self.name + '_' + str(i) + '.png'
 			color = np.ones((maplines.shape[0]), dtype='uint8') * 15
 			self.draw_line(iname, testimg, maplines, coloridx=color, thickness=3)
+
+		f = 'scores.txt'
+		with open(f, 'a') as file:
+			file.write(sstr)
 		return Ms[n-1], scores[n-1]
  
 

@@ -1,5 +1,7 @@
 import os
 import json
+from tkinter import image_names
+import cv2
 import mmcv
 import numpy as np
 import ntpath
@@ -41,6 +43,54 @@ def get_all_files(path):
     allfile = list(filter(lambda x: x.find(".mp4") >= 0, allfile))
     return allfile
 
+def build_court(detection_cfg,
+          estimation_cfg,
+          tracker_cfg,
+          image_dir,
+          out_dir,
+          gpus=1,
+          worker_per_gpu=1,
+          video_max_length=10000,
+          category_annotation=None):
+
+    # cache_checkpoint(detection_cfg.checkpoint_file)
+    # cache_checkpoint(estimation_cfg.checkpoint_file)
+    if tracker_cfg is not None:
+        raise NotImplementedError
+
+    if not os.path.isdir(out_dir):
+        os.makedirs(out_dir)
+
+    inputs = Manager().Queue(video_max_length)
+    results = Manager().Queue(video_max_length)
+
+    num_worker = gpus * worker_per_gpu
+    procs = []
+    for i in range(num_worker):
+        p = Process(
+            target=worker,
+            args=(inputs, results, i % gpus, detection_cfg, estimation_cfg))
+        procs.append(p)
+        p.start()
+    
+    image_file_list = get_all_files(image_dir)
+    prog_bar = ProgressBar(len(image_file_list))
+    for image_file in image_file_list:
+        image_name = image_file.split('/')[-1].split('.')[0]
+        reader = cv2.imread(image_file)
+        frame_court_model = court_model(reader, image_name)
+        prog_bar.update()
+
+    # send end signals
+    for p in procs:
+        inputs.put((-1, None))
+    # wait to finish
+    for p in procs:
+        p.join()
+
+    print('\nBuild court dataset to {}.'.format(out_dir))
+    return
+
 def build(detection_cfg,
           estimation_cfg,
           tracker_cfg,
@@ -76,12 +126,12 @@ def build(detection_cfg,
             args=(inputs, results, i % gpus, detection_cfg, estimation_cfg))
         procs.append(p)
         p.start()
-
+    
     video_file_list = get_all_files(video_dir)
     prog_bar = ProgressBar(len(video_file_list))
     for video_file in video_file_list:
         video_name = video_file.split('/')[-1].split('.')[0]
-        if video_name != 'output':
+        if video_name != 'ff_a_01':
             continue
         action = video_name.split('_')[0]
         category_id = video_categories[action][
@@ -95,7 +145,7 @@ def build(detection_cfg,
         annotations = []
         num_keypoints = -1
 
-        frame_court_model = court_model(video_frames[0])
+        frame_court_model = court_model(video_frames[0], video_name)
         for i, image in enumerate(video_frames):
             inputs.put((i, image))
 
