@@ -51,7 +51,7 @@ class court_model(object):
 		i = 0
 		while i < 4 and (self.image.get('lines') is None or self.image.get('lines').shape[0] < 5):
 			candidate, contours = self.white_pixel_extract(img, threshold=10+5*i)
-			self.line_detection(candidate, contours, img)
+			self.line_detection(candidate, img, contours)
 			i += 1
 		if self.image.get('lines') is None or self.image['lines'].shape[0] < 5:
 			f = 'scores.txt'
@@ -315,13 +315,14 @@ class court_model(object):
 			purenormals: a (m * 5) matrix
 		'''
 		# remove lines those are not in the court contours.
-		valid = np.zeros((lines.shape[0]), dtype=int)
-		for cnt in contours:
-			p1 = np.array([cv2.pointPolygonTest(cnt, (int(l[0]), int(l[1])), True) for l in lines])
-			p2 = np.array([cv2.pointPolygonTest(cnt, (int(l[2]), int(l[3])), True) for l in lines])
-			v = np.where((p1 > 0) & (p2 > 0), 1, 0)
-			valid = cv2.bitwise_or(valid, v).reshape(-1)
-		lines = lines[np.argwhere(valid == 1)[:, 0]]
+		if contours is not None:
+			valid = np.zeros((lines.shape[0]), dtype=int)
+			for cnt in contours:
+				p1 = np.array([cv2.pointPolygonTest(cnt, (int(l[0]), int(l[1])), True) for l in lines])
+				p2 = np.array([cv2.pointPolygonTest(cnt, (int(l[2]), int(l[3])), True) for l in lines])
+				v = np.where((p1 > 0) & (p2 > 0), 1, 0)
+				valid = cv2.bitwise_or(valid, v).reshape(-1)
+			lines = lines[np.argwhere(valid == 1)[:, 0]]
 
 		# 计算法线
 		normal = self.calculate_normal(lines)
@@ -345,7 +346,7 @@ class court_model(object):
 		return purelines, purenormals
 
 	
-	def line_detection(self, img, contours, source_image):
+	def line_detection(self, img, source_image, contours=None):
 		"""
 		:params: img: input image. we detecte lines from this image.
 		:return: purelines: detected lines.
@@ -387,10 +388,9 @@ class court_model(object):
 		self.image['normals'] = purenormals
 		
 		result3 = source_image.copy()
-		# pl = np.concatenate((purelines, self.standard['hlines'], self.standard['vlines']), axis=0)
-		pl = purelines
+		pl = np.concatenate((purelines, self.standard['hlines'], self.standard['vlines']), axis=0)
 		cix = np.ones((pl.shape[0]), dtype=np.int8) * 10
-		self.draw_line("pureline/"+self.name+".png", result3, pl, coloridx=cix, thickness=3)
+		self.draw_line("pureline/"+self.name+".png", result3, pl, coloridx=cix, thickness=1)
 		
 		self.calculate_intersections_as_matrix(purelines)
 
@@ -479,7 +479,9 @@ class court_model(object):
 			dst = np.matmul(M, point1).T
 			return dst
 		
-		sl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0) # n * 4
+		# sl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0) # n * 4
+		# n = sl.shape[0]
+		sl = self.image['lines']
 		n = sl.shape[0]
 		
 		pt1 = get_3d_points(sl[:, :2], M)
@@ -654,7 +656,8 @@ class court_model(object):
 				# 	continue
 
 				# 3. calculate homography matrix H
-				M = cv2.getPerspectiveTransform(np.float32(st_points), np.float32(ig_points))
+				M = cv2.getPerspectiveTransform(np.float32(ig_points), np.float32(st_points))
+				# M = cv2.getPerspectiveTransform(np.float32(st_points), np.float32(ig_points))
 
 				if M is None:
 					continue
@@ -662,29 +665,29 @@ class court_model(object):
 				# for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
 				mapping_lines = self.calculate_mapping_lines(M)
 				
-				# testimg = cv2.imread("pureline/"+self.name+".png")
-				# pp = st_points.astype(np.int)
-				# i = 3
-				# for j in range(4):
-				# 	cv2.circle(testimg, pp[j], i, (0, 0, 255), thickness=-1)
-				# 	i += 2
-				# pp = ig_points.astype(np.int)
-				# i = 3
-				# for j in range(4):
-				# 	cv2.circle(testimg, pp[j], i, (0, 255, 0), thickness=-1)
-				# 	i += 2
-				# tmp = st_points.reshape((1, 4, 2)).astype(np.float32)
-				# mp_points = cv2.perspectiveTransform(tmp, M)
-				# mp_points = mp_points.reshape((4, 2)).astype(int)
-				# i = 5
-				# for j in range(4):
-				# 	cv2.circle(testimg, mp_points[j], i, (255, 0, 0), thickness=2)
-				# 	i += 3
-				# mapping_lines = mapping_lines.astype(int)
-				# iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
-				# color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 6
+				testimg = cv2.imread("pureline/"+self.name+".png")
+				pp = st_points.astype(np.int)
+				i = 3
+				for j in range(4):
+					cv2.circle(testimg, pp[j], i, (0, 0, 255), thickness=-1)
+					i += 2
+				pp = ig_points.astype(np.int)
+				i = 3
+				for j in range(4):
+					cv2.circle(testimg, pp[j], i, (0, 255, 0), thickness=-1)
+					i += 2
+				tmp = st_points.reshape((1, 4, 2)).astype(np.float32)
+				mp_points = cv2.perspectiveTransform(tmp, M)
+				mp_points = mp_points.reshape((4, 2)).astype(int)
+				i = 5
+				for j in range(4):
+					cv2.circle(testimg, mp_points[j], i, (255, 0, 0), thickness=2)
+					i += 3
+				mapping_lines = mapping_lines.astype(int)
+				iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
+				color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 6
 				
-				# self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
+				self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
 
 				# 5. calculate accuracy score of p, and get the most suitable one.
 				s, m_count = self.calculate_score(mapping_lines)

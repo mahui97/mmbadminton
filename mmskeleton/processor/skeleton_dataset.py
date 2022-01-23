@@ -40,7 +40,7 @@ def get_all_files(path):
             allfile.append(os.path.join(dirpath, dir))
         for name in filenames:
             allfile.append(os.path.join(dirpath, name))
-    allfile = list(filter(lambda x: x.find(".mp4") >= 0, allfile))
+    allfile = list(filter(lambda x: x.find(".png") >= 0, allfile))
     return allfile
 
 def build_court(detection_cfg,
@@ -77,6 +77,8 @@ def build_court(detection_cfg,
     prog_bar = ProgressBar(len(image_file_list))
     for image_file in image_file_list:
         image_name = image_file.split('/')[-1].split('.')[0]
+        if image_name != '031':
+            continue
         reader = cv2.imread(image_file)
         frame_court_model = court_model(reader, image_name)
         prog_bar.update()
