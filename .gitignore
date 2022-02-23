@@ -121,3 +121,9 @@ mmskeleton/version.py
 mediating/
 mapimage/
 pointimage/
+best/
+pureline/
+
+# data
+resource/badminton_data
+work_dir/
