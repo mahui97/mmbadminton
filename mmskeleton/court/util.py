@@ -69,3 +69,21 @@ def get_y(line, x):
             return np.ones((x.shape)) * avgy
         return avgy
     return -(A * x + C) / B
+
+def get_x(line, y):
+    '''
+    :params: line: (x1, y1, x2, y2)
+    :params: x: np.float32
+    :return: y: (x, y) in line === (y1 - y2) / (x1 - x2) = (y - y1) / (x - x1)
+    '''
+    y_type = type(y)
+    x1, y1, x2, y2 = line[:4]
+    A = y1 - y2
+    B = x2 - x1
+    C = x1 * y2 - x2 * y1
+    avgx = (x1 + x2) / 2
+    if A == 0:
+        if y_type == np.ndarray:
+            return np.ones((y.shape)) * avgx
+        return avgx
+    return (B * y - C) / A

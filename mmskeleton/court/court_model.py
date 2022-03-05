@@ -1,11 +1,16 @@
+import enum
 from os import sep
+from re import I, L, M
 from typing import Counter
 import cv2
+from ortools.graph import pywrapgraph
 import numpy as np
 from scipy import optimize
 from sklearn.feature_extraction import image
+from sympy import per, true
 from sympy.utilities.iterables import subsets
-from mmskeleton.court.util import UnionFind, distance_point_line, get_y
+from torch import std_mean
+from mmskeleton.court.util import UnionFind, distance_point_line, get_y, get_x
 INT_MAX = 2 ** 31
 Epsilon = 1e-7
 
@@ -13,6 +18,25 @@ class court_model(object):
 	def __init__(self, img, name):
 		super().__init__()
 		self.name = name
+		self.imgshape = img.shape
+		self.camera = name.split('_')[1]
+
+		Ms = dict()
+		Ms['a'] = np.array([[-5.63616596e-02,-1.01770634e+00, 6.22732758e+02], [ 9.76048293e-02,-8.20133118e-01, 3.42732851e+02], [ 1.74010867e-05,-2.39916459e-03, 1.00000000e+00]], dtype=np.float32)
+		Ms['b'] = np.array([[ 6.56484408e-02, 1.62314456e-01,-2.40789893e+02], [-5.01214085e-02, 2.25210761e-01,-1.63632516e+02], [-3.47945323e-05,-2.04907072e-03, 1.00000000e+00]], dtype=np.float32)
+		Ms['c'] = np.array([[ 1.21365211e-01,-3.54205605e-01, 5.05352462e+01], [-3.36060800e-03, 5.44561275e-01,-4.45235201e+02], [-3.24120566e-07,-2.15192935e-03, 1.00000000e+00]], dtype=np.float32)
+		Ms['d'] = np.array([[ 6.67846840e-01,-1.02464112e+00,-4.38394866e+02], [ 6.11363030e-02, 2.04472802e+00,-1.77750908e+03], [-3.23480777e-05,-5.90650766e-03, 1.00000000e+00]], dtype=np.float32)
+		Ms['e'] = np.array([[-3.20190922e-04, 4.16976115e-01,-3.43113338e+02], [-8.60847462e-02,-3.08379587e-01, 2.44533706e+02], [-2.66825768e-05,-1.87671584e-03, 1.00000000e+00]], dtype=np.float32)
+    
+		self.M = Ms[self.camera]
+		half_countors = dict()
+		half_countors['a'] = np.array([[[50, 604], [87, 1080], [409, 1080], [1920, 721], [1920, 651], [1055, 543]]])
+		half_countors['b'] = np.array([[[996, 582], [4, 687], [1, 703], [1181, 929], [1920, 673], [1920, 637]]])
+		half_countors['c'] = np.array([[[521, 610], [6, 800], [1882, 809], [1360, 615]]])
+		half_countors['d'] = np.array([[[503, 533], [82, 866], [1859, 860], [1414, 533]]])
+		half_countors['e'] = np.array([[[1283, 640], [367, 647], [3, 740], [3, 824], [1866, 783]]])
+		self.half_countor = half_countors[self.camera]
+		return
 		self.standard = dict()
 		# 垂直线
 		self.standard['vlines'] = np.array([[12, 12, 12, 680],
@@ -28,31 +52,16 @@ class court_model(object):
 						   [12, 446, 315, 446],
 						   [12, 642, 315, 642],
 						   [12, 680, 315, 680]])
-		# # 垂直线
-		# self.standard['vlines'] = np.array([[14, 29, 14, 450],
-		# 				   [29, 29, 29, 450],
-		# 				   [110, 29, 110, 177],
-		# 				   [191, 29, 191, 450],
-		# 				   [205, 29, 205, 450],
-		# 				   [110, 303, 110, 450]])
-		# # 水平线
-		# self.standard['hlines'] = np.array([[14, 29, 205, 29],
-		# 				   [14, 53, 205, 53],
-		# 				   [14, 177, 205, 177],
-		# 				   [14, 303, 205, 303],
-		# 				   [14, 426, 205, 426],
-		# 				   [14, 450, 205, 450]])
 		self.standard['indexes'] = np.arange(12)
 		self.calculate_intersections_as_matrix()
-
-		self.imgshape = img.shape
 
 		self.image = dict()
 		i = 0
 		while i < 4 and (self.image.get('lines') is None or self.image.get('lines').shape[0] < 5):
-			candidate, contours = self.white_pixel_extract(img, threshold=10+5*i)
+			candidate, contours = self.white_pixel_extract(img, threshold=10+5*i, white_thres=10+10*i)
 			self.line_detection(candidate, img, contours)
 			i += 1
+		
 		if self.image.get('lines') is None or self.image['lines'].shape[0] < 5:
 			f = 'scores.txt'
 			with open(f, 'a') as file:
@@ -122,7 +131,7 @@ class court_model(object):
 		return l
 
 
-	def white_pixel_extract(self, img, threshold=5):
+	def white_pixel_extract(self, img, threshold=5, white_thres=10):
 		cv2.imwrite("mediating/0_source.png", img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 		h, w = img.shape[:2]
 		# 1. 找到绿色区域
@@ -190,15 +199,21 @@ class court_model(object):
 		# # Bitwise-AND mask and original image
 		# res = cv2.bitwise_and(img,img, mask=binary)
 		# cv2.imwrite("mediating/8_basketball_res.png", res, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-		# cv2.imwrite("mediating/9_origin.png", img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-
+		
 		# im_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-		retval, im_at_fixed = cv2.threshold(result, 50, 255, cv2.THRESH_BINARY) # 二值化
-		cv2.imwrite("mediating/10_im_at_fixed.png", im_at_fixed, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-		# remove dressed region
-		c1 = self.line_constraint(im_at_fixed, 10, 128, 20)
-		cv2.imwrite("mediating/11_candidate.png", c1, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		gray = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
+		lower = np.uint8([0, 180-white_thres, 20])
+		upper = np.uint8([255, 255, 255])
+		white_mask = cv2.inRange(gray, lower, upper)
+		cv2.imwrite("mediating/9_white1.png", white_mask, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 
+		# retval, im_at_fixed = cv2.threshold(result, 50, 255, cv2.THRESH_BINARY) # 二值化
+		# cv2.imwrite("mediating/10_im_at_fixed.png", im_at_fixed, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		# remove dressed region
+		c1 = self.line_constraint(white_mask, 10, 128, 20)
+		c1 = cv2.bitwise_or(c1, result)
+		cv2.imwrite("mediating/11_candidate.png", c1, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		
 		# todo: remove textured region
 		# c2 = cv2.cornerEigenValsAndVecs(c1, 5, 3)
 		return c1, hulls
@@ -220,6 +235,12 @@ class court_model(object):
 			x1, y1, x2, y2 = line[:4]
 			r, b, g = int(colors[cidx % 20, 0]), int(colors[cidx % 20, 1]), int(colors[cidx % 20, 2])
 			cv2.line(img, (x1, y1), (x2, y2), (r, b, g), thickness=thickness)
+		
+		stl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0)
+		stl = stl.astype(np.int)
+		for i, line in enumerate(stl):
+			x1, y1, x2, y2 = line[:4]
+			cv2.line(img, (x1, y1), (x2, y2), (255, 255, 255), thickness=1)
 		cv2.imwrite(imgName, img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
 		return img
 
@@ -251,7 +272,6 @@ class court_model(object):
 		"""
 		normal: n * 5, a normal = (n1, n2, d, k, b)
 		"""
-		# TODO: 计算法线的方法有问题，正负号
 		need_flatten = False
 		if lines.shape[0] == lines.size:
 			need_flatten = True
@@ -375,12 +395,20 @@ class court_model(object):
 
 		# hough line detection
 		edges = cv2.Canny(dilt, 32, 200, apertureSize=3)
-		# cv2.imwrite("mediating/22_edges.png", edges, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-		lines = cv2.HoughLinesP(edges, 1, np.pi / 360, 15, minLineLength=200, maxLineGap=30)
+		cv2.imwrite("mediating/22_edges.png", edges, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+		lines = cv2.HoughLinesP(edges, 1, np.pi / 360, 15, minLineLength=230, maxLineGap=30)
 		if lines is None:
 			return
 
 		lines = lines.reshape((lines.shape[0], -1))
+		# # ff_c_01: lines
+		# lines = np.array([[4,800,669,561],
+		# 	[144,801,704,564],
+		# 	[946,802,943,648],
+		# 	[1485,702,1184,571],
+		# 	[4,800,1488,807],
+		# 	[121,760,1486,767],
+		# 	[443,645,1425,648]])
 		result2 = source_image.copy()
 		self.draw_line("mediating/23_multiline.png", result2, lines)
 
@@ -388,9 +416,10 @@ class court_model(object):
 		self.image['normals'] = purenormals
 		
 		result3 = source_image.copy()
-		pl = np.concatenate((purelines, self.standard['hlines'], self.standard['vlines']), axis=0)
+		# pl = np.concatenate((purelines, self.standard['hlines'], self.standard['vlines']), axis=0)
+		pl = purelines
 		cix = np.ones((pl.shape[0]), dtype=np.int8) * 10
-		self.draw_line("pureline/"+self.name+".png", result3, pl, coloridx=cix, thickness=1)
+		self.draw_line("pureline/"+self.name+".png", result3, pl, coloridx=cix, thickness=3)
 		
 		self.calculate_intersections_as_matrix(purelines)
 
@@ -479,10 +508,10 @@ class court_model(object):
 			dst = np.matmul(M, point1).T
 			return dst
 		
-		# sl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0) # n * 4
-		# n = sl.shape[0]
-		sl = self.image['lines']
+		sl = np.concatenate((self.standard['hlines'], self.standard['vlines']), axis=0) # n * 4
 		n = sl.shape[0]
+		# sl = self.image['lines']
+		# n = sl.shape[0]
 		
 		pt1 = get_3d_points(sl[:, :2], M)
 		pt2 = get_3d_points(sl[:, 2:], M)
@@ -640,62 +669,174 @@ class court_model(object):
 		points = points.reshape((4, 2))
 		return points
 	
+	def calcu_mapping_lines_ig_st(self, M):
+		src = self.image['lines']
+		pt1 = np.array(src[:, :2], dtype=np.float32)
+		pt2 = np.array(src[:, 2:], dtype=np.float32)
+		n = src.shape[0]
+		npt1 = cv2.perspectiveTransform(pt1[None, :, :], M)
+		npt2 = cv2.perspectiveTransform(pt2[None, :, :], M)
+		npt1 = npt1.reshape((n, 2))
+		npt2 = npt2.reshape((n, 2))
+		return np.concatenate((npt1, npt2), axis=1)
+	
+	def calcu_score_ig_st(self, maplines):
+		'''
+		for px in each (imgline, mapline), we calculate distance(px, mapline) and add all distance to get score.
+		:params: imglines: we recognize lines from the image, n * (x1, y1, x2, y2)
+		:params: maplines: using homography M, we map the standard_line to image, n * (x1, y1, x2, y2)
+		:return: score: this mapping's score. We like lower score.
+		'''
+		# 计算分数，
+		# 1. 对于每条线，查看是否匹配
+		# 2. 如果匹配，则进入第三步；否则，转回第一步
+		# 3. 检查长度imgline < mapline是否成立，如果成立，进入第四步；否则转回第一步
+		# 4. match_line += 1
+		# 5. 两条线的左右端点相互对应，对每个imgline的像素ipx，根据比例求对应的mapline上的像素mpx
+		# 6. 计算dis(ipx, mpx)，并求和，作为score
+		# 7. 检查匹配的match_line > 4? 如果不是 ，则返回本次匹配不成功；是则返回成功score
+		mnormals = self.calculate_normal(maplines)
+
+		def hline_map(mapline, dThres=5):
+			hlines = self.standard['hlines']
+			
+			len_hline = hlines[0, 2] - hlines[0, 0]
+			tol = (hlines[0, 2] - hlines[0, 0]) / 8
+			for j in range(hlines.shape[0]):
+				d1 = distance_point_line(mapline[:2], hlines[j])
+				d2 = distance_point_line(mapline[2:4], hlines[j])
+				if d1 > dThres or d2 > dThres:
+					continue
+				if self.line_length(mapline) > tol * 9:
+					continue
+				ml = mapline[[2, 3, 0, 1]] if mapline[0] > mapline[2] else mapline
+				sl = hlines[j]
+				if sl[2] < ml[2] - tol or sl[0] > ml[0] + tol:
+					continue
+				mpxx = np.arange(ml[0], ml[2]+1, 1)
+				mpxy = get_y(ml, mpxx)
+
+				dis = distance_point_line(np.vstack((mpxx, mpxy)).T, sl)
+				dis = np.where(dis < dThres, 1, 0)
+
+				return j, np.sum(dis)
+			return -1, 0
+		
+		def vline_map(mapline, dThres=5):
+			vlines = self.standard['vlines']
+			for j in range(vlines.shape[0]):
+				sl = vlines[j]
+				tol = (sl[3] - sl[1]) / 8
+				d1 = distance_point_line(mapline[:2], sl)
+				d2 = distance_point_line(mapline[2:4], sl)
+				if d1 > dThres or d2 > dThres:
+					continue
+				if self.line_length(mapline) > tol * 9:
+					continue
+				ml = mapline[[2, 3, 0, 1]] if mapline[1] > mapline[3] else mapline
+				if sl[3] < ml[3] - tol or sl[1] > ml[1] + tol:
+					continue
+				
+				mpxy = np.arange(ml[1], ml[3]+1, 1)
+				mpxx = get_x(ml, mpxy)
+
+				dis = distance_point_line(np.vstack((mpxx, mpxy)).T, sl)
+				dis = np.where(dis < dThres, 1, 0)
+
+				return j+6, np.sum(dis)
+			return -1, 0
+
+		hThres = np.tan(np.pi * 2 / 90)
+		vThres = np.tan(np.pi * 43 / 90)
+		
+		nodes = []
+		for i in range(maplines.shape[0]):
+			s = 0
+			j = -1
+			if np.abs(mnormals[i, 3]) < hThres:
+				j, s = hline_map(maplines[i], 10)
+			elif np.abs(mnormals[i, 3]) > vThres:
+				j, s = vline_map(maplines[i], 10)
+			if j > -1:
+				nodes.append([i, j, s])
+		
+		def get_max_flow(tuple, m, n):
+			'''
+			tuple: (i, j, v) === edge `(i, j)` has a value `v`
+			m: number of i, i = 0 ~ m-1
+			n: number of j, j = 0 ~ n-1
+			'''
+			if len(tuple) < 1:
+				return 0, 0
+			tt = np.array(tuple)
+			left_node_cnt = np.unique(tt[:, 0]).size
+			right_node_cnt = np.unique(tt[:, 1]).size
+			min_cost_flow = pywrapgraph.SimpleMinCostFlow()
+			for i in range(len(tuple)):
+				min_cost_flow.AddArcWithCapacityAndUnitCost(tuple[i][0], tuple[i][1]+m, 1, int(-tuple[i][2]))
+			for i in range(m):
+				min_cost_flow.AddArcWithCapacityAndUnitCost(0, i, 1, 0)
+				min_cost_flow.SetNodeSupply(i, 0)
+			for i in range(n):
+				min_cost_flow.AddArcWithCapacityAndUnitCost(i+m, m+n+1, 1, 0)
+				min_cost_flow.SetNodeSupply(i+m, 0)
+			for j in range(min(left_node_cnt, right_node_cnt), 0, -1):
+				min_cost_flow.SetNodeSupply(0, j)
+				min_cost_flow.SetNodeSupply(m+n+1, -j)
+				if min_cost_flow.Solve() == min_cost_flow.OPTIMAL:
+					return j, -min_cost_flow.OptimalCost()
+			return 0, 0
+		# mc: 有多少条线匹配
+		# score: 匹配的最高得分
+		mc, score = get_max_flow(nodes, maplines.shape[0], self.standard['hlines'].shape[0]+self.standard['vlines'].shape[0])
+
+		return score, mc
+
+
 	def model_fitting_once(self, ig_points, scores, Ms, idxstr=None):
 		sstr = ''
 		for sh in range(3):
 			for sv in range(4):
 				st_points = self.get_points(np.array([sh, sh+1, sv, sv+1]), type='standard')
 
-				# # store score to txt
-				# sigp = ''.join(np.array2string(ig_points, separator=',').splitlines())
-				# sstp = ''.join(np.array2string(st_points, separator=',').splitlines())
-				  
-				# if '[[0_2]_ [0_8]_ [2_7]_ [2_8]]' in idxstr:
+				# if '[[2_7]_ [2_8]_ [3_7]_ [3_8]]' in idxstr:
 				# 	print(idxstr)
 				# else:
 				# 	continue
 
-				# 3. calculate homography matrix H
-				M = cv2.getPerspectiveTransform(np.float32(ig_points), np.float32(st_points))
+				# # 3. calculate homography matrix H
 				# M = cv2.getPerspectiveTransform(np.float32(st_points), np.float32(ig_points))
 
+				# if M is None:
+				# 	continue
+				# # 4. get lines from standard model using M.
+				# # for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
+				# mapping_lines = self.calculate_mapping_lines(M)
+				# # 5. calculate accuracy score of p, and get the most suitable one.
+				# s, m_count = self.calculate_score(mapping_lines)
+
+				M = cv2.getPerspectiveTransform(np.float32(ig_points), np.float32(st_points))
 				if M is None:
 					continue
-				# 4. get lines from standard model using M.
-				# for each point(x, y) in standard model, we calculate (u, v, 1) = M*(x, y, 1)^T
-				mapping_lines = self.calculate_mapping_lines(M)
+				mapping_lines = self.calcu_mapping_lines_ig_st(M)
+				
 				
 				testimg = cv2.imread("pureline/"+self.name+".png")
-				pp = st_points.astype(np.int)
-				i = 3
-				for j in range(4):
-					cv2.circle(testimg, pp[j], i, (0, 0, 255), thickness=-1)
-					i += 2
 				pp = ig_points.astype(np.int)
 				i = 3
 				for j in range(4):
 					cv2.circle(testimg, pp[j], i, (0, 255, 0), thickness=-1)
 					i += 2
 				tmp = st_points.reshape((1, 4, 2)).astype(np.float32)
-				mp_points = cv2.perspectiveTransform(tmp, M)
-				mp_points = mp_points.reshape((4, 2)).astype(int)
-				i = 5
-				for j in range(4):
-					cv2.circle(testimg, mp_points[j], i, (255, 0, 0), thickness=2)
-					i += 3
 				mapping_lines = mapping_lines.astype(int)
 				iname = 'mapimage/' + idxstr + '_' + str(sh) + '_' + str(sv) + '.png'
 				color = np.ones((mapping_lines.shape[0]), dtype='uint8') * 6
-				
 				self.draw_line(iname, testimg, mapping_lines, coloridx=color, thickness=2)
 
-				# 5. calculate accuracy score of p, and get the most suitable one.
-				s, m_count = self.calculate_score(mapping_lines)
+				s, m_count = self.calcu_score_ig_st(mapping_lines)
 				if s > scores[m_count]:
 					scores[m_count] = s
 					Ms[m_count] = M
-				
-				# sstr = sstr + sigp + '\t' + sstp + '\t' + str(s) + '\n'
 
 		return scores, Ms
 	
@@ -751,14 +892,15 @@ class court_model(object):
 				scores, Ms = self.model_fitting_once(points, scores, Ms, iname)
 				points = points[[1, 2, 3, 0]]
 			
-			# TODO: 选取最佳模型策略
+		# TODO: 选取最佳模型策略
 		sstr = ''
 		for i in range(Ms.shape[0]):
 			Mi = ''.join(np.array2string(Ms[i], separator=',').splitlines())
 			sstr = sstr + self.name + '\t' + str(i) + '\t' + str(scores[i]) + '\t' + Mi + '\n'
 			if scores[i] < 200:
 				continue
-			maplines = self.calculate_mapping_lines(Ms[i])
+			# maplines = self.calculate_mapping_lines(Ms[i])
+			maplines = self.calcu_mapping_lines_ig_st(Ms[i])
 			testimg = cv2.imread("pureline/"+self.name+".png")
 			maplines = maplines.astype(int)
 			iname = 'best/' + self.name + '_' + str(i) + '.png'
@@ -768,8 +910,18 @@ class court_model(object):
 		f = 'scores.txt'
 		with open(f, 'a') as file:
 			file.write(sstr)
-		return Ms[n-1], scores[n-1]
- 
+		return Ms[n], scores[n]
+
+	def in_half_countor(self, person_bbox):
+		x1, y1, x2, y2 = person_bbox.flatten()[:4]
+		person_countor = np.array([[[x1, y1], [x1, y2], [x2, y2], [x2, y1]]], dtype=np.int)
+		white_img = np.zeros(self.imgshape)
+		p1 = cv2.drawContours(white_img, person_countor, -1, (1, 1, 1), -1)
+		white_img = np.zeros(self.imgshape)
+		p2 = cv2.drawContours(white_img, self.half_countor, -1, (2, 2, 2), -1)
+		p2 = p1 + p2
+		return 3 in p2
+
 
 	def in_court(self, ankle_points):
 		"""
@@ -780,14 +932,26 @@ class court_model(object):
 		:return: true if 
 				false else
 		"""
-
-		# point1 = np.hstack((ankle_points, np.ones((2, 1), dtype='int')))
-		# mapping1 = np.dot(M, point1.T).T
-		# mapping1 = mapping1[:, :2]
-		# def in_standard(point):
-		# 	x0, y0 = point[0], point[1]
-		# 	return x0 <= 205 and x0 >= 14 and y0 <= 450 and y0 >= 14
-		return True
-		# return in_standard(mapping1[0, :]) and in_standard(mapping1[1, :])
+		pts = np.array(ankle_points[None, :, :], dtype=np.float32)
+		if self.camera == 'e':
+			pts = pts + np.array([[[0, 25], [0, 25]]])
+		std_ankle = cv2.perspectiveTransform(pts, self.M)
+		std_ankle = std_ankle.reshape((2, 2))
+		dst = np.array([])
+		def in_standard(point):
+			x0, y0 = point[0], point[1]
+			return x0 <= 315 and x0 >= 12 and y0 <= 650 and y0 >= 12
+		if in_standard(std_ankle[0]) == False:
+			std_ankle[0] = np.array([-1, -1])
+		else:
+			dst = std_ankle[0]
+		if in_standard(std_ankle[1]) == False:
+			std_ankle[1] = np.array([-1, -1])
+		elif dst.size == 2: 
+			dst = np.array([dst, std_ankle[1]])
+		else:
+			dst = std_ankle[1]
+		
+		return dst.size > 1, dst
 # ----------------- END ----------------------
 

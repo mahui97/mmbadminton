@@ -40,7 +40,7 @@ def get_all_files(path):
             allfile.append(os.path.join(dirpath, dir))
         for name in filenames:
             allfile.append(os.path.join(dirpath, name))
-    allfile = list(filter(lambda x: x.find(".png") >= 0, allfile))
+    allfile = list(filter(lambda x: x.find(".mp4") >= 0, allfile))
     return allfile
 
 def build_court(detection_cfg,
@@ -66,7 +66,7 @@ def build_court(detection_cfg,
 
     num_worker = gpus * worker_per_gpu
     procs = []
-    for i in range(num_worker):
+    for i in range(num_worker): 
         p = Process(
             target=worker,
             args=(inputs, results, i % gpus, detection_cfg, estimation_cfg))
@@ -77,9 +77,9 @@ def build_court(detection_cfg,
     prog_bar = ProgressBar(len(image_file_list))
     for image_file in image_file_list:
         image_name = image_file.split('/')[-1].split('.')[0]
-        if image_name != '031':
+        if image_name != 'ff_b_01':  
             continue
-        reader = cv2.imread(image_file)
+        reader = cv2.imread(image_file) 
         frame_court_model = court_model(reader, image_name)
         prog_bar.update()
 
@@ -133,8 +133,8 @@ def build(detection_cfg,
     prog_bar = ProgressBar(len(video_file_list))
     for video_file in video_file_list:
         video_name = video_file.split('/')[-1].split('.')[0]
-        if video_name != 'ff_a_01':
-            continue
+        # if video_name != 'fc_a_02':
+        #     continue
         action = video_name.split('_')[0]
         category_id = video_categories[action][
             'category_id'] if action in video_categories else -1
@@ -146,7 +146,7 @@ def build(detection_cfg,
         video_frames = reader[:video_max_length]
         annotations = []
         num_keypoints = -1
-
+        invalid_frames = []
         frame_court_model = court_model(video_frames[0], video_name)
         for i, image in enumerate(video_frames):
             inputs.put((i, image))
@@ -162,34 +162,50 @@ def build(detection_cfg,
             # in_court[j]=0: this person is not a player
             # in_court[j]=1: a player we need
             in_court = np.zeros((num_person))
-            bbox_size = 2147483648
-            last_person_id = -1
-            for j in range(num_person):
-                in_court[j] = 1 if frame_court_model.in_court(t['joint_preds'][j][15:17, :]) == True else 0
-                if in_court[j] == 1:
-                    bspace = (t['person_bbox'][j][2] - t['person_bbox'][j][0]) * (t['person_bbox'][j][3] - t['person_bbox'][j][1])
-                    if bbox_size <= bspace:
-                        in_court[j] = 0
-                    else:
-                        bbox_size = bspace
-                        if last_person_id > -1:
-                            in_court[last_person_id] = 0
-                        last_person_id = j
-            assert np.sum(in_court) == 1
+            ankles = np.ones((2, 2))
+            if num_person == 1:
+                in_court[0] = 1
+                valid_player, ankles = frame_court_model.in_court(t['joint_preds'][0][15:17, :])
+            else:
+                bbox_size = 2147483648
+                last_person_id = -1
+                
+                for j in range(num_person):
+                    valid_player = frame_court_model.in_half_countor(t['person_bbox'][j])
 
-            for j in range(num_person):
-                if in_court[j] == 0:
-                    continue
+                    # valid_player, std_ankle = frame_court_model.in_court(t['joint_preds'][j][15:17, :])
+
+                    in_court[j] = 1 if valid_player == True else 0
+                    if in_court[j] == 1:
+                        bspace = (t['person_bbox'][j][2] - t['person_bbox'][j][0]) * (t['person_bbox'][j][3] - t['person_bbox'][j][1])
+                        if bbox_size <= bspace:
+                            in_court[j] = 0
+                        else:
+                            bbox_size = bspace
+                            # ankles = std_ankle
+                            if last_person_id > -1:
+                                in_court[last_person_id] = 0
+                            last_person_id = j
+                
+            if np.sum(in_court) != 1:
+                invalid_frames.append(i)
+                continue
+            j_value = np.argwhere(in_court == 1).reshape(-1).tolist()
+            for j in j_value:
+            # for j in range(num_person):
                 keypoints = [[p[0], p[1], round(s[0], 2)] for p, s in zip(
                     t['joint_preds'][j].round().astype(int).tolist(), t[
                         'joint_scores'][j].tolist())]
                 num_keypoints = len(keypoints)
+                # location = ankles.mean(axis=0).tolist()
+                
                 person_info = dict(
                     person_bbox=t['person_bbox'][j].round().astype(int)
                     .tolist(),
                     frame_index=t['frame_index'],
-                    id=j,
+                    id=0,
                     person_id=None,
+                    # location=location, # 坐标
                     keypoints=keypoints)
                 annotations.append(person_info)
 
@@ -206,7 +222,10 @@ def build(detection_cfg,
             info=info, category_id=category_id, annotations=annotations)
         with open(os.path.join(out_dir, video_name + '.json'), 'w') as f:
             json.dump(video_info, f)
-
+        if invalid_frames != []:
+            invalid_str = video_name + ' ' + str(invalid_frames) + '\n'
+            with open('invalid_frames.txt', 'a') as f:
+                f.write(invalid_str)
         prog_bar.update()
 
     # send end signals
@@ -219,8 +238,203 @@ def build(detection_cfg,
     print('\nBuild skeleton dataset to {}.'.format(out_dir))
     return video_info
 
+def build_matchai(detection_cfg,
+          estimation_cfg,
+          tracker_cfg,
+          video_dir,
+          label_dir,
+          out_dir,
+          gpus=1,
+          worker_per_gpu=1,
+          video_max_length=3600,
+          fps=30,
+          category_annotation=None):
+
+    cache_checkpoint(detection_cfg.checkpoint_file)
+    cache_checkpoint(estimation_cfg.checkpoint_file)
+    if tracker_cfg is not None:
+        raise NotImplementedError
+
+    if not os.path.isdir(out_dir):
+        os.makedirs(out_dir)
+    
+    if category_annotation is None:
+        video_categories = dict()
+    else:
+        with open(category_annotation) as f:
+            video_categories = json.load(f)['annotations']
+    
+    inputs = Manager().Queue(video_max_length)
+    results = Manager().Queue(video_max_length)
+
+    num_worker = gpus * worker_per_gpu
+    procs = []
+    for i in range(num_worker):
+        p = Process(
+            target=worker,
+            args=(inputs, results, i % gpus, detection_cfg, estimation_cfg))
+        procs.append(p)
+        p.start()
+    
+    video_file_list = get_all_files(video_dir)
+    prog_bar = ProgressBar(len(video_file_list))
+    for video_file in video_file_list:
+        video_name = video_file.split('/')[-1].split('.')[0] # example: 7_i
+        index = video_name.split('_')[1]
+        if int(index) > 10:
+            continue # 7_1 ~ 7_10
+        reader = mmcv.VideoReader(video_file)
+        with open(os.path.join(label_dir, 'final_'+index+'.json'), 'r') as f:
+            shot_json = json.load(f)
+        if isinstance(shot_json, dict):
+            for key in shot_json:
+                sub_video_json = shot_json[key]
+                # sub_video = reader[sub_video_json['start_time']*fps:sub_video_json['end_time']*fps]
+                # each shot_key is a video
+                for shot_key in sub_video_json['shots']:
+                    shot = sub_video_json['shots'][shot_key]
+                    
+                    category_id = video_categories[shot['Major_shot']]['category_id'] if shot['Major_shot'] in video_categories else -1
+                    if category_id == -1:
+                        continue
+
+                    start_frame = int(shot['start_frame_shot'] * fps)
+                    end_frame = int(shot['end_frame_shot'] * fps + 1)
+                    video_frames = reader[start_frame:end_frame]
+                    
+                    annotations = []
+                    num_keypoints = -1
+                    
+                    
+                    for i, image in enumerate(video_frames):
+                        inputs.put((i, image))
+
+                    for i in range(len(video_frames)):
+                        t = results.get()
+                        if not t['has_return']:
+                            continue
+
+                        num_person = len(t['joint_preds'])
+                        assert len(t['person_bbox']) == num_person
+                        
+                        # find proper person of this action
+                        valid_index = -1
+                        for j in range(num_person):
+                            person_bbox=t['person_bbox'][j].round().astype(int)
+                            person_center = person_bbox[:4].reshape((2,2)).mean(axis=0)
+                            if person_center[0] < 176 or person_center[0] > 625:
+                                continue
+                            if shot['player_played'] == 'bottom' and person_center[1] > 400:
+                                valid_index = j
+                            if shot['player_played'] == 'top' and person_center[1] > 165 and person_center[1] < 401:
+                                valid_index = j
+                        if valid_index == -1:
+                            continue
+                        
+                        j = valid_index
+                        keypoints = [[p[0], p[1], round(s[0], 2)] for p, s in zip(
+                            t['joint_preds'][j].round().astype(int).tolist(), t[
+                                'joint_scores'][j].tolist())]
+                        num_keypoints = len(keypoints)
+                        
+                        person_info = dict(
+                            person_bbox=t['person_bbox'][j].round().astype(int)
+                            .tolist(),
+                            frame_index=t['frame_index'],
+                            id=0,
+                            person_id=None,
+                            keypoints=keypoints)
+                        annotations.append(person_info)
+
+                    # output results
+                    annotations = sorted(annotations, key=lambda x: x['frame_index'])
+                    
+                    v_name = video_name + '_' + key + '_' + shot_key
+                    info = dict(
+                        video_name=v_name,
+                        resolution=reader.resolution,
+                        num_frame=len(video_frames),
+                        num_keypoints=num_keypoints,
+                        keypoint_channels=['x', 'y', 'score'],
+                        version='1.0')
+                    video_info = dict(
+                        info=info, category_id=category_id, annotations=annotations)
+                    with open(os.path.join(out_dir, v_name + '.json'), 'w') as f:
+                        json.dump(video_info, f)
+                prog_bar.update()
+
+    # send end signals
+    for p in procs:
+        inputs.put((-1, None))
+    # wait to finish
+    for p in procs:
+        p.join()
+
+    print('\nBuild skeleton dataset to {}.'.format(out_dir))
+    return video_info
 
 import torch
+import ffmpy
+
+def cut_matchai(detection_cfg,
+          estimation_cfg,
+          tracker_cfg,
+          video_dir,
+          label_dir,
+          out_dir,
+          gpus=1,
+          worker_per_gpu=1,
+          video_max_length=10000,
+          fps=30):
+    if not os.path.isdir(out_dir):
+        os.makedirs(out_dir)
+
+    inputs = Manager().Queue(video_max_length)
+    results = Manager().Queue(video_max_length)
+
+    num_worker = gpus * worker_per_gpu
+    procs = []
+    for i in range(num_worker):
+        p = Process(
+            target=worker,
+            args=(inputs, results, i % gpus, detection_cfg, estimation_cfg))
+        procs.append(p)
+        p.start()
+    
+    video_file_list = os.listdir(video_dir)
+    prog_bar = ProgressBar(len(video_file_list))
+    
+    for video_file in video_file_list:
+        index = video_file.split('.')[0].split('_')[1]
+        if int(index) < 10:
+            continue
+        if index in ['10', '24', '47', '65', '105', '51', '64', '80', '81', '82', '91']:
+            continue
+        with open(os.path.join(label_dir, 'final_'+index+'.json'), 'r') as f:
+            shot_json = json.load(f)
+        if isinstance(shot_json, dict):
+            for key in shot_json:
+                sub_video_json = shot_json[key]
+                for shot_key in sub_video_json['shots']:
+                    shot = sub_video_json['shots'][shot_key]
+                    start_frame = int(shot['start_frame_shot'] * fps)
+                    end_frame = int(shot['end_frame_shot'] * fps + 1)
+                    
+                    # example: 1_top_SMASH.mp4
+                    output_file = out_dir + '/' + index + '_' + shot['player_played'] + '_' + shot['Major_shot'] + '_' + key + '_' + shot_key + '.mp4'
+                    cmd = 'ffmpeg -i ' + video_dir + '/' + video_file + ' -vf "select=between(n\\,' + str(start_frame) + '\\,' + str(end_frame) + ')" -y -acodec copy ' + output_file
+                    os.system(cmd)
+        prog_bar.update()
+
+    # send end signals
+    for p in procs:
+        inputs.put((-1, None))
+    # wait to finish
+    for p in procs:
+        p.join()
+
+    print('\nBuild matchai shot videos to {}.'.format(out_dir))
+    return        
 
 
 def f(data):

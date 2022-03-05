@@ -64,6 +64,7 @@ def train(
         loss_cfg,
         dataset_cfg,
         optimizer_cfg,
+        checkpoint,
         total_epochs,
         training_hooks,
         batch_size=None,
@@ -100,8 +101,9 @@ def train(
         model = torch.nn.Sequential(*model)
     else:
         model = call_obj(**model_cfg)
-    model.apply(weights_init)
+    # model.apply(weights_init)
 
+    load_checkpoint(model, checkpoint, map_location='cpu')
     model = MMDataParallel(model, device_ids=range(gpus)).cuda()
     loss = call_obj(**loss_cfg)
 

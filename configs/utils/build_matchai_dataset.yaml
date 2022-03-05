@@ -1,11 +1,11 @@
 processor_cfg:
-  type: "processor.skeleton_dataset.build"
+  type: "processor.skeleton_dataset.build_matchai"
   gpus: 1
-  worker_per_gpu: 2
-  # image_dir: resource/data
-  video_dir: resource/badminton_data_70
-  out_dir: "data/badminton_70"
-  category_annotation: resource/category_annotation_example.json
+  worker_per_gpu: 4
+  video_dir: resource/matchai_videos_60
+  label_dir: resource/shot_json
+  out_dir: "data/matchai_v1"
+  category_annotation: resource/category_annotation_matchai.json
   detection_cfg:
     model_cfg: configs/mmdet/cascade_rcnn_r50_fpn_1x.py
     checkpoint_file: mmskeleton://mmdet/cascade_rcnn_r50_fpn_20e
@@ -28,6 +28,7 @@ processor_cfg:
         - 0.225
       post_process: true
   tracker_cfg: null
+  fps: 60
 
 argparse_cfg:
   gpus:
@@ -36,18 +37,18 @@ argparse_cfg:
   worker_per_gpu:
     bind_to: processor_cfg.worker_per_gpu
     help: number of workers for each gpu
-  # image_dir:
-  #   bind_to: processor_cfg.image_dir
-  #   help: folder for videos
   video_dir:
     bind_to: processor_cfg.video_dir
     help: folder for videos
-  category_annotation:
-    bind_to: processor_cfg.category_annotation
-    help: a json file recording video category annotation
+  label_dir:
+    bind_to: processor_cfg.label_dir
+    help: folder for videos
   out_dir:
     bind_to: processor_cfg.out_dir
     help: folder for storing output dataset
+  category_annotation:
+    bind_to: processor_cfg.category_annotation
+    help: a json file recording video category annotation
   skeleton_model:
     bind_to: processor_cfg.estimation_cfg.model_cfg
   skeleton_checkpoint:
@@ -56,3 +57,5 @@ argparse_cfg:
     bind_to: processor_cfg.detection_cfg.model_cfg
   detection_checkpoint:
     bind_to: processor_cfg.detection_cfg.checkpoint_file
+  fps:
+    bind_to: processor_cfg.fps

@@ -122,8 +122,9 @@ def pad_zero(data, size):
     if T < size:
         pad_shape = list(np_array.shape)
         pad_shape[2] = size
+        start_T = random.randint(0, size-T-1)
         np_array_paded = np.zeros(pad_shape, dtype=np_array.dtype)
-        np_array_paded[:, :, :T, :] = np_array
+        np_array_paded[:, :, start_T:start_T+T, :] = np_array
         data['data'] = np_array_paded
     return data
 
