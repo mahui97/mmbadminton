@@ -4,6 +4,16 @@ import json
 import torch
 
 
+def get_all_files(path):
+    allfile = []
+    for dirpath, dirnames, filenames in os.walk(path):
+        for dir in dirnames:
+            allfile.append(os.path.join(dirpath, dir))
+        for name in filenames:
+            allfile.append(os.path.join(dirpath, name))
+    allfile = list(filter(lambda x: x.find(".json") >= 0, allfile))
+    return allfile
+
 class SkeletonLoader(torch.utils.data.Dataset):
     """ Feeder for skeleton-based action recognition
     Arguments:
@@ -17,9 +27,11 @@ class SkeletonLoader(torch.utils.data.Dataset):
         self.data_dir = data_dir
         self.num_track = num_track
         self.num_keypoints = num_keypoints
-        self.files = [
-            os.path.join(self.data_dir, f) for f in os.listdir(self.data_dir)
-        ] * repeat
+        
+        self.files = get_all_files(self.data_dir) * repeat
+        # self.files = [
+        #     os.path.join(self.data_dir, f) for f in os.listdir(self.data_dir)
+        # ] * repeat
 
     def __len__(self):
         return len(self.files)

@@ -5,80 +5,79 @@
         "ta_chi",
         "ff_a_01",
         "ff_e_01",
-        "ff_d_01"
+        "ff_d_01",
+        "ff_b_01",
+        "ff_c_01"
     ],
     "annotations": {
         "ff": {
-            "category_id": 1
+            "category_id": 0
         },
         "jf": {
-            "category_id": 2
+            "category_id": 1
         },
         "zwqx": {
-            "category_id": 3
+            "category_id": 2
         },
         "fwqx": {
-            "category_id": 4
+            "category_id": 3
         },
         "ft": {
-            "category_id": 5
+            "category_id": 4
         },
         "zg": {
-            "category_id": 6
+            "category_id": 5
         },
         "fg": {
-            "category_id": 7
+            "category_id": 6
         },
         "ztt": {
-            "category_id": 8
+            "category_id": 7
         },
         "ftt": {
-            "category_id": 9
+            "category_id": 8
         },
         "wqfw": {
-            "category_id": 10
+            "category_id": 9
         },
         "zc": {
-            "category_id": 21
+            "category_id": 10
         },
         "fc": {
-            "category_id": 22
+            "category_id": 11
         },
         "zpg": {
-            "category_id": 31
+            "category_id": 12
         },
         "fpg": {
-            "category_id": 32
+            "category_id": 13
         },
         "fps": {
-            "category_id": 33
+            "category_id": 14
         },
         "zjgy": {
-            "category_id": 34
+            "category_id": 15
         },
         "zsz": {
-            "category_id": 35
+            "category_id": 16
         },
         "zd": {
-            "category_id": 36
+            "category_id": 17
         },
         "fd": {
-            "category_id": 37
+            "category_id": 18
         },
         "hclcs": {
-            "category_id": 41
+            "category_id": 19
         },
         "hclcd": {
-            "category_id": 42
+            "category_id": 20
+        },
+        "hclcsc": {
+            "category_id": 21
         },
         "zgy": {
-            "category_id": 43
-        },
-        "testcourt": {
-            "category_id": 100
-        },
-        "output": {
-            "category_id": 100
+            "category_id": 22
         }
     }
 }

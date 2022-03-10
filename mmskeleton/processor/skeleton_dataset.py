@@ -1,3 +1,4 @@
+from genericpath import exists
 import os
 import json
 from tkinter import image_names
@@ -277,12 +278,18 @@ def build_matchai(detection_cfg,
         p.start()
     
     video_file_list = get_all_files(video_dir)
-    prog_bar = ProgressBar(len(video_file_list))
+    prog_bar = ProgressBar(2000)
     for video_file in video_file_list:
         video_name = video_file.split('/')[-1].split('.')[0] # example: 7_i
         index = video_name.split('_')[1]
-        if int(index) > 10:
-            continue # 7_1 ~ 7_10
+        if int(index) < 83 or int(index) > 107 or index == '91':
+            continue # 7_83 ~ 7_90
+        # if index in ['51', '64', '80', '81', '82', '91']:
+        #     continue
+        subdir = os.path.join(out_dir, video_name)
+        if not os.path.isdir(subdir):
+            os.makedirs(subdir)
+        
         reader = mmcv.VideoReader(video_file)
         with open(os.path.join(label_dir, 'final_'+index+'.json'), 'r') as f:
             shot_json = json.load(f)
@@ -359,7 +366,7 @@ def build_matchai(detection_cfg,
                         version='1.0')
                     video_info = dict(
                         info=info, category_id=category_id, annotations=annotations)
-                    with open(os.path.join(out_dir, v_name + '.json'), 'w') as f:
+                    with open(os.path.join(subdir, v_name + '.json'), 'w') as f:
                         json.dump(video_info, f)
                 prog_bar.update()
 
@@ -376,6 +383,28 @@ def build_matchai(detection_cfg,
 import torch
 import ffmpy
 
+def cut_a_video(ffmpeg_args, fps=30):
+    
+    start_frame = int(ffmpeg_args['shot']['start_frame_shot'] * fps)
+    end_frame = int(ffmpeg_args['shot']['end_frame_shot'] * fps + 1)
+    
+    if not os.path.isdir(ffmpeg_args['out_dir']):
+        os.makedirs(ffmpeg_args['out_dir'])
+    # example: 1_top_SMASH.mp4
+    cmd = 'ffmpeg -i ' + ffmpeg_args['full_video_name'] + ' -vf "select=between(n\\,' + str(start_frame) + '\\,' + str(end_frame) + ')" -y -acodec copy '\
+         + os.path.join(ffmpeg_args['out_dir'], ffmpeg_args['out_file_name'])
+    os.system(cmd)
+
+def worker_cut_matchai(inputs, gpu):
+    while True:
+        args = inputs.get()
+
+        # end signal
+        if args is None:
+            return
+
+        cut_a_video(args, fps=60)
+
 def cut_matchai(detection_cfg,
           estimation_cfg,
           tracker_cfg,
@@ -390,14 +419,13 @@ def cut_matchai(detection_cfg,
         os.makedirs(out_dir)
 
     inputs = Manager().Queue(video_max_length)
-    results = Manager().Queue(video_max_length)
 
     num_worker = gpus * worker_per_gpu
     procs = []
     for i in range(num_worker):
         p = Process(
-            target=worker,
-            args=(inputs, results, i % gpus, detection_cfg, estimation_cfg))
+            target=worker_cut_matchai,
+            args=(inputs, i % gpus))
         procs.append(p)
         p.start()
     
@@ -406,9 +434,8 @@ def cut_matchai(detection_cfg,
     
     for video_file in video_file_list:
         index = video_file.split('.')[0].split('_')[1]
-        if int(index) < 10:
-            continue
-        if index in ['10', '24', '47', '65', '105', '51', '64', '80', '81', '82', '91']:
+        # 7_76 have not finished completely
+        if index in ['6', '8', '10', '14', '24', '47', '50', '65', '105', '51', '64', '80', '81', '82', '91']:
             continue
         with open(os.path.join(label_dir, 'final_'+index+'.json'), 'r') as f:
             shot_json = json.load(f)
@@ -417,13 +444,14 @@ def cut_matchai(detection_cfg,
                 sub_video_json = shot_json[key]
                 for shot_key in sub_video_json['shots']:
                     shot = sub_video_json['shots'][shot_key]
-                    start_frame = int(shot['start_frame_shot'] * fps)
-                    end_frame = int(shot['end_frame_shot'] * fps + 1)
+                    args = {
+                        "full_video_name": video_dir + '/' + video_file,
+                        "shot": shot,
+                        "out_dir": os.path.join(out_dir, '7_' + index),
+                        "out_file_name": index + '_' + shot['player_played'] + '_' + shot['Major_shot'] + '_' + key + '_' + shot_key + '.mp4'
+                    }
+                    inputs.put(args)
                     
-                    # example: 1_top_SMASH.mp4
-                    output_file = out_dir + '/' + index + '_' + shot['player_played'] + '_' + shot['Major_shot'] + '_' + key + '_' + shot_key + '.mp4'
-                    cmd = 'ffmpeg -i ' + video_dir + '/' + video_file + ' -vf "select=between(n\\,' + str(start_frame) + '\\,' + str(end_frame) + ')" -y -acodec copy ' + output_file
-                    os.system(cmd)
         prog_bar.update()
 
     # send end signals

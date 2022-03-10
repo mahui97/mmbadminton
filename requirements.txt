@@ -1,4 +1,7 @@
-mmcv
+mmcv==0.4.3
 torch>=1.1
 torchvision
 lazy_import
+pycocotools
+sympy
+ffmpy==0.3.0

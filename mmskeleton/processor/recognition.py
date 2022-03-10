@@ -101,7 +101,7 @@ def train(
         model = torch.nn.Sequential(*model)
     else:
         model = call_obj(**model_cfg)
-    # model.apply(weights_init)
+    model.apply(weights_init)
 
     load_checkpoint(model, checkpoint, map_location='cpu')
     model = MMDataParallel(model, device_ids=range(gpus)).cuda()
